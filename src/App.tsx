@@ -1947,9 +1947,10 @@ const WatchDetailModal = ({
   cart?: CartItem[];
   onUpdateQty?: (id: string, delta: number) => void;
 }) => {
+  const [activeIdx, setActiveIdx] = useState(0);
+
   if (!watch) return null;
 
-  const [activeIdx, setActiveIdx] = useState(0);
   const galleryImages = getProductGallery(watch);
   const specs = getSpecifications(watch);
   const isLiked = wishlist.includes(watch.id);
@@ -2197,46 +2198,11 @@ const ProductPage = ({
 
   const watch = watches.find(w => w.id === id) || WATCHES.find(w => w.id === id);
 
-  if (!watch) {
-    return (
-      <div className="pt-40 pb-32 text-center max-w-md mx-auto px-6 space-y-6">
-        <h1 className="text-3xl font-serif font-bold text-white tracking-tight">Timepiece Not Found</h1>
-        <p className="text-neutral-500 text-sm">We are unable to locate the designated horological specimen inside our current inventory archives.</p>
-        <Link to="/shop" className="inline-block bg-gold hover:bg-white text-black text-xs font-mono font-bold tracking-[0.2em] px-8 py-4 transition-all duration-300 uppercase rounded-sm">
-          Return to Catalogue
-        </Link>
-      </div>
-    );
-  }
-
-  const galleryImages = getProductGallery(watch);
   const [activeIdx, setActiveIdx] = useState(0);
-  const specs = getSpecifications(watch);
-  const isLiked = wishlist.includes(watch.id);
-
-  // States for Image Zoom
   const [zoomStyle, setZoomStyle] = useState({});
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const { left, top, width, height } = e.currentTarget.getBoundingClientRect();
-    const x = ((e.clientX - left) / width) * 100;
-    const y = ((e.clientY - top) / height) * 100;
-    setZoomStyle({
-      transformOrigin: `${x}% ${y}%`,
-      transform: "scale(1.8)"
-    });
-  };
-
-  const handleMouseLeave = () => {
-    setZoomStyle({
-      transformOrigin: "center center",
-      transform: "scale(1)"
-    });
-  };
-
-  // States for dynamic Reviews
   const [localReviews, setLocalReviews] = useState<any[]>(() => {
     try {
-      const saved = localStorage.getItem(`pingaksh_reviews_${watch.id}`);
+      const saved = watch ? localStorage.getItem(`pingaksh_reviews_${watch.id}`) : null;
       return saved ? JSON.parse(saved) : [
         {
           id: "r1",
@@ -2272,6 +2238,40 @@ const ProductPage = ({
   const [revRating, setRevRating] = useState(5);
   const [revComment, setRevComment] = useState("");
   const [revSuccess, setRevSuccess] = useState(false);
+
+  if (!watch) {
+    return (
+      <div className="pt-40 pb-32 text-center max-w-md mx-auto px-6 space-y-6">
+        <h1 className="text-3xl font-serif font-bold text-white tracking-tight">Timepiece Not Found</h1>
+        <p className="text-neutral-500 text-sm">We are unable to locate the designated horological specimen inside our current inventory archives.</p>
+        <Link to="/shop" className="inline-block bg-gold hover:bg-white text-black text-xs font-mono font-bold tracking-[0.2em] px-8 py-4 transition-all duration-300 uppercase rounded-sm">
+          Return to Catalogue
+        </Link>
+      </div>
+    );
+  }
+
+  const galleryImages = getProductGallery(watch);
+  const specs = getSpecifications(watch);
+  const isLiked = wishlist.includes(watch.id);
+
+  // States for Image Zoom
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const { left, top, width, height } = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - left) / width) * 100;
+    const y = ((e.clientY - top) / height) * 100;
+    setZoomStyle({
+      transformOrigin: `${x}% ${y}%`,
+      transform: "scale(1.8)"
+    });
+  };
+
+  const handleMouseLeave = () => {
+    setZoomStyle({
+      transformOrigin: "center center",
+      transform: "scale(1)"
+    });
+  };
 
   const handleAddReview = (e: React.FormEvent) => {
     e.preventDefault();
@@ -3156,7 +3156,8 @@ const ProfilePage = ({
   const [warrantyLog, setWarrantyLog] = useState<any[]>(() => {
     try {
       const saved = localStorage.getItem("pingaksh_warranties");
-      return saved ? JSON.parse(saved) : [
+      const parsed = saved ? JSON.parse(saved) : null;
+      return Array.isArray(parsed) ? parsed : [
         {
           watchingName: "Aurelius Gold",
           serialKey: "PGS-824018-GOLD",
@@ -3651,7 +3652,8 @@ export default function App() {
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
       const saved = localStorage.getItem("pingaksh_cart");
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : null;
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
@@ -3674,7 +3676,8 @@ export default function App() {
   const [wishlist, setWishlist] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("pingaksh_wishlist");
-      return saved ? JSON.parse(saved) : [];
+      const parsed = saved ? JSON.parse(saved) : null;
+      return Array.isArray(parsed) ? parsed : [];
     } catch {
       return [];
     }
