@@ -3202,19 +3202,11 @@ const ProfilePage = ({
     setTimeout(() => setRecSuccess(false), 4000);
   };
 
-  // Redirect to login if user session is lost
-  useEffect(() => {
-    if (!user) {
-      navigate("/login");
-    }
-  }, [user, navigate]);
-
-  if (!user) return null;
-
   // Retrieve customer orders dynamically support Supabase or localStorage fallback
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
 
   useEffect(() => {
+    if (!user) return;
     if (isSupabaseConfigured && supabase && user) {
       getSupabaseOrders(user.uid)
         .then((dbOrders) => {
@@ -3243,6 +3235,15 @@ const ProfilePage = ({
       }
     }
   }, [user, watches]);
+
+  // Redirect to login if user session is lost
+  useEffect(() => {
+    if (!user) {
+      navigate("/login");
+    }
+  }, [user, navigate]);
+
+  if (!user) return null;
 
   const wishlistWatches = (watches.length > 0 ? watches : WATCHES).filter(w => wishlist.includes(w.id));
 
