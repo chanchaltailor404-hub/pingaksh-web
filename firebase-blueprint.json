@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "Watch": {
+      "title": "Watch",
+      "description": "A luxury watch for sale.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The name of the watch." },
+        "price": { "type": "number", "description": "The price of the watch." },
+        "category": { "type": "string", "description": "The category of the watch (Classic, Sport, Minimalist, Luxury)." },
+        "image": { "type": "string", "description": "The image URL of the watch." },
+        "description": { "type": "string", "description": "A detailed description of the watch." }
+      },
+      "required": ["name", "price", "category", "image"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A customer purchase order.",
+      "type": "object",
+      "properties": {
+        "items": { "type": "array", "description": "The items in the order." },
+        "total": { "type": "number", "description": "The total price of the order." },
+        "customerEmail": { "type": "string", "description": "The customer's email address." },
+        "customerPhone": { "type": "string", "description": "The customer's phone number." },
+        "status": { "type": "string", "description": "The status of the order (pending, processing, shipped, delivered)." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "The date and time the order was placed." }
+      },
+      "required": ["items", "total", "customerEmail", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/watches/{watchId}": {
+      "schema": "Watch",
+      "description": "Collection of watches for sale."
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of customer orders."
+    }
+  }
+}
