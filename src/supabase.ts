@@ -1,9 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Fetch from Vite client-side environment variables defined in .env
+// Fetch from environment variables dynamically
 const env = (import.meta as any).env || {};
-const supabaseUrl = env.VITE_SUPABASE_URL;
-const supabaseAnonKey = env.VITE_SUPABASE_ANON_KEY;
+const procEnv = (typeof process !== "undefined" ? process.env : {}) as any;
+
+const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || procEnv.NEXT_PUBLIC_SUPABASE_URL || env.VITE_SUPABASE_URL || procEnv.VITE_SUPABASE_URL;
+const supabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || procEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || procEnv.VITE_SUPABASE_ANON_KEY;
 
 // Verify if credentials have been configured
 export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey);
@@ -15,7 +17,7 @@ export const supabase = isSupabaseConfigured
 // Display a high luxury notification logs when database connections are uncalibrated
 if (!isSupabaseConfigured) {
   console.warn(
-    "Supabase configuration coordinates are missing in environment variables. Define VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY inside .env.example or settings."
+    "Supabase configuration coordinates are missing in environment variables. Define NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY inside environment settings."
   );
 }
 
