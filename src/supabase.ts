@@ -377,15 +377,44 @@ export const updateSupabaseOrderStatus = async (
 };
 
 // 8. Wishlist Operations with Dynamic Table Selection & Column Fallbacks
+// 8. Wishlist Operations with Dynamic Table Selection, Authenticated user ID fetch & Fail-safe policies
 export const getSupabaseWishlist = async (userId: string): Promise<string[]> => {
   if (!supabase) return [];
   try {
     const tableName = await getWishlistTableName();
-    console.log(`[Supabase Wishlist] Retrieving wishlist items from table: ${tableName} for user ID: ${userId}`);
-    const { data, error } = await supabase
+    
+    // Dynamically retrieve the absolute authenticated user ID to align with RLS policies
+    let finalUserId = userId;
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (authUser) {
+      finalUserId = authUser.id;
+      console.log(`[Supabase Wishlist] Verified active dynamic auth user ID: ${finalUserId}`);
+    } else {
+      console.warn(`[Supabase Wishlist] No active auth session found. Using provided ID: ${userId}`);
+    }
+
+    console.log(`[Supabase Wishlist] Retrieving wishlist items from table: ${tableName} for user ID: ${finalUserId}`);
+    let { data, error } = await supabase
       .from(tableName || "wishlist")
       .select("product_id")
-      .eq("user_id", userId);
+      .eq("user_id", finalUserId);
+
+    // If table relation is missing or undefined_table, try fallback alternative table
+    if (error && (error.code === "42P01" || error.message?.includes("does not exist"))) {
+      const altTable = tableName === "wishlist" ? "wishlists" : "wishlist";
+      console.log(`[Supabase Wishlist Fallback] Table ${tableName} does not exist. Retrying with alternate table: ${altTable}`);
+      const fallbackResult = await supabase
+        .from(altTable)
+        .select("product_id")
+        .eq("user_id", finalUserId);
+      
+      if (fallbackResult.error) {
+        console.error(`[Supabase Wishlist Fallback Failure] Retrying alternative table ${altTable} failed inside getSupabaseWishlist:`, fallbackResult.error);
+        return [];
+      }
+      data = fallbackResult.data;
+      error = null;
+    }
 
     if (error) {
       console.error(`[Supabase Wishlist] Error retrieving user wishlist from table ${tableName}:`, error);
@@ -402,53 +431,79 @@ export const syncSupabaseWishlist = async (userId: string, productIds: string[])
   if (!supabase) return;
   try {
     const tableName = await getWishlistTableName();
-    console.log(`[Supabase Wishlist] Synchronizing user wishlist with table: ${tableName} for user ID: ${userId}, item count: ${productIds.length}`);
     
-    // Clear any existing entries for this user
-    const { error: deleteError } = await supabase
-      .from(tableName || "wishlist")
-      .delete()
-      .eq("user_id", userId);
-
-    if (deleteError) {
-      console.warn(`[Supabase Wishlist] Error clearing wishlist inside ${tableName}:`, deleteError);
+    // Dynamically retrieve the absolute authenticated user ID to align with RLS policies
+    let finalUserId = userId;
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (authUser) {
+      finalUserId = authUser.id;
     }
 
-    if (productIds.length === 0) return;
+    console.log(`[Supabase Wishlist] Synchronizing user wishlist with table: ${tableName} for user ID: ${finalUserId}, item count: ${productIds.length}`);
+    
+    // Helper to run delete / insert
+    const runSyncOnTable = async (table: string) => {
+      // Clear any existing entries for this user
+      const { error: deleteError } = await supabase
+        .from(table)
+        .delete()
+        .eq("user_id", finalUserId);
 
-    // Insert wishlist entries
-    const payload = productIds.map(productId => ({
-      user_id: userId,
-      product_id: productId,
-      created_at: new Date().toISOString()
-    }));
-
-    const { error: insertError } = await supabase
-      .from(tableName || "wishlist")
-      .insert(payload);
-
-    if (insertError) {
-      console.warn(`[Supabase Wishlist] Initial wishlist insert in ${tableName} failed:`, insertError);
-      
-      // Retry without created_at column if database does not contain it
-      if (insertError.message?.includes("column") || insertError.code === "42703") {
-        console.log(`[Supabase Wishlist Retry] Retrying wishlist insertion without "created_at"...`);
-        const { error: retryError } = await supabase
-          .from(tableName || "wishlist")
-          .insert(
-            productIds.map(productId => ({
-              user_id: userId,
-              product_id: productId
-            }))
-          );
-        if (retryError) {
-          console.error(`[Supabase Wishlist Retry Failure] Failed inserting into ${tableName}:`, retryError);
-        } else {
-          console.log(`[Supabase Wishlist] Wishlist synchronized successfully without created_at in ${tableName}`);
-        }
+      if (deleteError) {
+        console.warn(`[Supabase Wishlist] Error clearing wishlist inside ${table}:`, deleteError);
       }
-    } else {
-      console.log(`[Supabase Wishlist] Wishlist synchronized successfully for user ${userId} in ${tableName}`);
+
+      if (productIds.length === 0) return;
+
+      // Insert wishlist entries
+      const payload = productIds.map(productId => ({
+        user_id: finalUserId,
+        product_id: productId,
+        created_at: new Date().toISOString()
+      }));
+
+      const { error: insertError } = await supabase
+        .from(table)
+        .insert(payload);
+
+      if (insertError) {
+        console.warn(`[Supabase Wishlist] Initial wishlist insert in ${table} failed:`, insertError);
+        
+        // Retry without created_at column if database does not contain it
+        if (insertError.message?.includes("column") || insertError.code === "42703") {
+          console.log(`[Supabase Wishlist Retry] Retrying wishlist insertion without "created_at" in ${table}...`);
+          const { error: retryError } = await supabase
+            .from(table)
+            .insert(
+              productIds.map(productId => ({
+                user_id: finalUserId,
+                product_id: productId
+              }))
+            );
+          if (retryError) {
+            console.error(`[Supabase Wishlist Retry Failure] Failed inserting into ${table}:`, retryError);
+            throw retryError;
+          } else {
+            console.log(`[Supabase Wishlist] Wishlist synchronized successfully without created_at in ${table}`);
+          }
+        } else {
+          throw insertError;
+        }
+      } else {
+        console.log(`[Supabase Wishlist] Wishlist synchronized successfully for user ${finalUserId} in ${table}`);
+      }
+    };
+
+    try {
+      await runSyncOnTable(tableName || "wishlist");
+    } catch (primaryErr: any) {
+      if (primaryErr?.code === "42P01" || primaryErr?.message?.includes("does not exist")) {
+        const altTable = tableName === "wishlist" ? "wishlists" : "wishlist";
+        console.log(`[Supabase Wishlist Fallback] Retrying complete sync on alternate table: ${altTable}`);
+        await runSyncOnTable(altTable);
+      } else {
+        throw primaryErr;
+      }
     }
   } catch (err) {
     console.error("[Supabase Wishlist Exception] syncSupabaseWishlist:", err);
@@ -456,46 +511,75 @@ export const syncSupabaseWishlist = async (userId: string, productIds: string[])
 };
 
 export const toggleSupabaseWishlistItem = async (userId: string, productId: string, isAdding: boolean) => {
-  if (!supabase) return;
+  if (!supabase) {
+    console.warn("[Supabase Wishlist] Supabase client unconfigured. Skipping toggle.");
+    return;
+  }
   try {
     const tableName = await getWishlistTableName();
-    console.log(`[Supabase Wishlist] Toggling wishlist: user ${userId}, product ${productId}, isAdding: ${isAdding} on table: ${tableName}`);
     
-    if (isAdding) {
-      const { error } = await supabase
-        .from(tableName || "wishlist")
-        .insert({ user_id: userId, product_id: productId, created_at: new Date().toISOString() });
-      
-      if (error) {
-        console.warn("[Supabase Wishlist] Initial toggle insert error:", error);
+    // Dynamically retrieve the absolute authenticated user ID to align with RLS policies
+    let finalUserId = userId;
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (authUser) {
+      finalUserId = authUser.id;
+      console.log(`[Supabase Wishlist] Verified active dynamic auth user ID: ${finalUserId}`);
+    } else {
+      console.warn(`[Supabase Wishlist] No active auth session found for toggle. Using provided ID: ${userId}`);
+    }
+
+    console.log(`[Supabase Wishlist] Toggling wishlist: user ${finalUserId}, product ${productId}, isAdding: ${isAdding} on table: ${tableName}`);
+    
+    const runToggleOnTable = async (table: string) => {
+      if (isAdding) {
+        const { error } = await supabase
+          .from(table)
+          .insert({ user_id: finalUserId, product_id: productId, created_at: new Date().toISOString() });
         
-        // Retry without created_at
-        if (error.message?.includes("column") || error.code === "42703") {
-          console.log("[Supabase Wishlist Retry] Retrying toggle wishlist insert without created_at...");
-          const { error: retryErr } = await supabase
-            .from(tableName || "wishlist")
-            .insert({ user_id: userId, product_id: productId });
-          if (retryErr) {
-            console.error("[Supabase Wishlist Retry Failure] Failed to add item to wishlist:", retryErr);
-            throw retryErr;
+        if (error) {
+          console.warn(`[Supabase Wishlist] Initial toggle insert error in ${table}:`, error);
+          
+          // Retry without created_at
+          if (error.message?.includes("column") || error.code === "42703") {
+            console.log(`[Supabase Wishlist Retry] Retrying toggle wishlist insert without created_at on ${table}...`);
+            const { error: retryErr } = await supabase
+              .from(table)
+              .insert({ user_id: finalUserId, product_id: productId });
+            if (retryErr) {
+              console.error(`[Supabase Wishlist Retry Failure] Failed to add item to wishlist on ${table}:`, retryErr);
+              throw retryErr;
+            }
+          } else {
+            throw error;
           }
-        } else {
+        }
+      } else {
+        const { error } = await supabase
+          .from(table)
+          .delete()
+          .eq("user_id", finalUserId)
+          .eq("product_id", productId);
+        
+        if (error) {
+          console.error(`[Supabase Wishlist] Failed removing item from wishlist on ${table}:`, error);
           throw error;
         }
       }
-    } else {
-      const { error } = await supabase
-        .from(tableName || "wishlist")
-        .delete()
-        .eq("user_id", userId)
-        .eq("product_id", productId);
-      
-      if (error) {
-        console.error("[Supabase Wishlist] Failed removing item from wishlist:", error);
-        throw error;
+    };
+
+    try {
+      await runToggleOnTable(tableName || "wishlist");
+      console.log(`[Supabase Wishlist] Successfully completed item toggle in table ${tableName}`);
+    } catch (primaryErr: any) {
+      if (primaryErr?.code === "42P01" || primaryErr?.message?.includes("does not exist")) {
+        const altTable = tableName === "wishlist" ? "wishlists" : "wishlist";
+        console.log(`[Supabase Wishlist Fallback] Retrying wishlist toggle insert/delete on alternate table: ${altTable}`);
+        await runToggleOnTable(altTable);
+        console.log(`[Supabase Wishlist] Successfully completed item toggle in alternate table ${altTable}`);
+      } else {
+        throw primaryErr;
       }
     }
-    console.log(`[Supabase Wishlist] Successfully completed item toggle in table ${tableName}`);
   } catch (err) {
     console.error("[Supabase Wishlist Exception] toggleSupabaseWishlistItem:", err);
     throw err;
