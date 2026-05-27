@@ -57,7 +57,12 @@ import {
   createSupabaseOrder,
   getSupabaseOrders,
   getSupabaseAllOrders,
-  updateSupabaseOrderStatus
+  updateSupabaseOrderStatus,
+  getSupabaseWishlist,
+  syncSupabaseWishlist,
+  toggleSupabaseWishlistItem,
+  subscribeNewsletter,
+  saveSupabaseProfile
 } from "./supabase";
 import WatchAssistant from "./components/WatchAssistant";
 
@@ -226,13 +231,28 @@ const Navbar = ({
 const Footer = () => {
   const [email, setEmail] = useState("");
   const [isSubscribed, setIsSubscribed] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
 
-  const handleSubscribe = (e: React.FormEvent) => {
+  const handleSubscribe = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email) {
+    if (!email) return;
+
+    setIsSubmitting(true);
+    setSubscribeError(null);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await subscribeNewsletter(email.trim());
+      }
       setIsSubscribed(true);
       setEmail("");
-      setTimeout(() => setIsSubscribed(false), 3000);
+      setTimeout(() => setIsSubscribed(false), 5000);
+    } catch (err: any) {
+      console.error("Mailing subscription failed:", err);
+      setSubscribeError(err?.message || "An anomalous error occurred with the subscription.");
+      setTimeout(() => setSubscribeError(null), 5000);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -284,10 +304,15 @@ const Footer = () => {
               placeholder="Email Dossier" 
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="bg-neutral-900 border border-neutral-800 rounded-sm px-4 py-3 text-xs w-full focus:outline-none focus:border-gold text-white placeholder-neutral-500 transition-colors"
+              disabled={isSubmitting}
+              className="bg-neutral-900 border border-neutral-800 rounded-sm px-4 py-3 text-xs w-full focus:outline-none focus:border-gold text-white placeholder-neutral-500 transition-colors disabled:opacity-50"
             />
-            <button type="submit" className="bg-gold text-black rounded-sm px-5 py-3 text-xs font-bold font-mono tracking-widest hover:bg-white hover:text-black transition-all duration-300">
-              JOIN
+            <button 
+              type="submit" 
+              disabled={isSubmitting}
+              className="bg-gold text-black rounded-sm px-5 py-3 text-xs font-bold font-mono tracking-widest hover:bg-white hover:text-black transition-all duration-300 disabled:opacity-60"
+            >
+              {isSubmitting ? "SYNC..." : "JOIN"}
             </button>
             <AnimatePresence>
               {isSubscribed && (
@@ -298,6 +323,16 @@ const Footer = () => {
                   className="absolute -bottom-8 left-0 text-gold text-xs font-bold font-serif italic"
                 >
                   Subscription confirmed. Welcome.
+                </motion.p>
+              )}
+              {subscribeError && (
+                <motion.p 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute -bottom-8 left-0 text-red-500 text-xs font-mono"
+                >
+                  {subscribeError}
                 </motion.p>
               )}
             </AnimatePresence>
@@ -2744,7 +2779,7 @@ const AuthPage = ({ user, modeOverride }: AuthPageProps) => {
             throw new Error("Security policy requires passwords of 6 or more characters.");
           }
 
-          const { error } = await supabase.auth.signUp({
+          const { data, error } = await supabase.auth.signUp({
             email: email.trim(),
             password: password,
             options: {
@@ -2755,6 +2790,16 @@ const AuthPage = ({ user, modeOverride }: AuthPageProps) => {
             }
           });
           if (error) throw error;
+
+          if (data?.user) {
+            try {
+              // Direct save profile profile write on the database
+              await saveSupabaseProfile(data.user.id, name.trim(), email.trim());
+            } catch (pErr) {
+              console.error("Direct profile write failed during signup:", pErr);
+            }
+          }
+
           setSuccess("Registry authorization complete! If email verification is active, please authorize your inbox link.");
         } else if (mode === "forgot") {
           const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
@@ -3625,7 +3670,10 @@ export default function App() {
     }
   });
 
-  const toggleWishlist = (id: string) => {
+  const toggleWishlist = async (id: string) => {
+    const isAdding = !wishlist.includes(id);
+    
+    // Smooth, optimistic local UI state change for instant reaction
     setWishlist(prev => {
       const updated = prev.includes(id) 
         ? prev.filter(item => item !== id) 
@@ -3633,6 +3681,14 @@ export default function App() {
       localStorage.setItem("pingaksh_wishlist", JSON.stringify(updated));
       return updated;
     });
+
+    if (isSupabaseConfigured && supabase && user) {
+      try {
+        await toggleSupabaseWishlistItem(user.uid, id, isAdding);
+      } catch (err) {
+        console.error("Failed to sync wishlist change to Supabase:", err);
+      }
+    }
   };
 
   useEffect(() => {
@@ -3665,12 +3721,40 @@ export default function App() {
         }
         if (session?.user) {
           const userMeta = session.user.user_metadata || {};
-          const name = userMeta.displayName || userMeta.name || userMeta.full_name || session.user.email?.split("@")[0] || "Exalted Collector";
+          let name = userMeta.displayName || userMeta.name || userMeta.full_name || session.user.email?.split("@")[0] || "Exalted Collector";
+          let role = "customer";
+
+          // Load current user profile dynamically from Supabase profiles table
+          try {
+            const profile = await getSupabaseProfile(session.user.id);
+            if (profile) {
+              name = profile.name || name;
+              role = profile.role || role;
+            } else {
+              // Self-healing: if auth user exists but profile wasn't fully saved, save it now
+              await saveSupabaseProfile(session.user.id, name, session.user.email || "");
+            }
+          } catch (profileErr) {
+            console.error("Failed loading user profile dynamically:", profileErr);
+          }
+
           setUser({
             uid: session.user.id,
             email: session.user.email || null,
-            displayName: name
-          });
+            displayName: name,
+            role: role
+          } as any);
+
+          // Dynamically load Wishlist from Supabase per user
+          try {
+            const dbWishlist = await getSupabaseWishlist(session.user.id);
+            if (dbWishlist) {
+              setWishlist(dbWishlist);
+              localStorage.setItem("pingaksh_wishlist", JSON.stringify(dbWishlist));
+            }
+          } catch (wishlistErr) {
+            console.error("Failed loading user wishlist from database:", wishlistErr);
+          }
         } else {
           setUser(null);
         }

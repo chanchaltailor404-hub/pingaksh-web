@@ -242,3 +242,100 @@ export const updateSupabaseOrderStatus = async (
     throw error;
   }
 };
+
+// 7. Wishlist Operations
+export const getSupabaseWishlist = async (userId: string): Promise<string[]> => {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("wishlist")
+    .select("product_id")
+    .eq("user_id", userId);
+
+  if (error) {
+    console.error("Error retrieving user wishlist from Supabase:", error);
+    return [];
+  }
+  return data?.map(d => d.product_id) || [];
+};
+
+export const syncSupabaseWishlist = async (userId: string, productIds: string[]) => {
+  if (!supabase) return;
+  
+  // Clear any existing entries for this user
+  const { error: deleteError } = await supabase
+    .from("wishlist")
+    .delete()
+    .eq("user_id", userId);
+
+  if (deleteError) {
+    console.error("Error clearing wishlist on sync:", deleteError);
+    return;
+  }
+
+  if (productIds.length === 0) return;
+
+  // Insert wishlist entries
+  const { error: insertError } = await supabase
+    .from("wishlist")
+    .insert(
+      productIds.map(productId => ({
+        user_id: userId,
+        product_id: productId
+      }))
+    );
+
+  if (insertError) {
+    console.error("Error inserting wishlist on sync:", insertError);
+  }
+};
+
+export const toggleSupabaseWishlistItem = async (userId: string, productId: string, isAdding: boolean) => {
+  if (!supabase) return;
+  if (isAdding) {
+    const { error } = await supabase
+      .from("wishlist")
+      .insert({ user_id: userId, product_id: productId });
+    if (error) {
+      console.error("Error adding to wishlist", error);
+    }
+  } else {
+    const { error } = await supabase
+      .from("wishlist")
+      .delete()
+      .eq("user_id", userId)
+      .eq("product_id", productId);
+    if (error) {
+      console.error("Error removing from wishlist", error);
+    }
+  }
+};
+
+// 8. Newsletter Subscription Operation
+export const subscribeNewsletter = async (email: string): Promise<void> => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("newsletter_subscribers")
+    .insert({ email });
+
+  if (error) {
+    console.error("Newsletter subscription failure:", error);
+    throw error;
+  }
+};
+
+// 9. Profile Saving Operation
+export const saveSupabaseProfile = async (uid: string, name: string, email: string) => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("profiles")
+    .upsert({
+      id: uid,
+      name,
+      email,
+      role: email === "chanchaltailor404@gmail.com" ? "admin" : "customer"
+    });
+  
+  if (error) {
+    console.error("Error saving user profile to Supabase:", error);
+  }
+};
