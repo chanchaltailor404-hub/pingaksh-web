@@ -385,12 +385,16 @@ export const getSupabaseWishlist = async (userId: string): Promise<string[]> => 
     
     // Dynamically retrieve the absolute authenticated user ID to align with RLS policies
     let finalUserId = userId;
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (authUser) {
-      finalUserId = authUser.id;
-      console.log(`[Supabase Wishlist] Verified active dynamic auth user ID: ${finalUserId}`);
-    } else {
-      console.warn(`[Supabase Wishlist] No active auth session found. Using provided ID: ${userId}`);
+    try {
+      const { data: authUserRes } = await supabase.auth.getUser();
+      if (authUserRes && authUserRes.user) {
+        finalUserId = authUserRes.user.id;
+        console.log(`[Supabase Wishlist] Verified active dynamic auth user ID: ${finalUserId}`);
+      } else {
+        console.warn(`[Supabase Wishlist] No active auth session found. Using provided ID: ${userId}`);
+      }
+    } catch (authErr) {
+      console.warn(`[Supabase Wishlist] Failed dynamically checking auth state. Relying on supplied ID: ${userId}`, authErr);
     }
 
     console.log(`[Supabase Wishlist] Retrieving wishlist items from table: ${tableName} for user ID: ${finalUserId}`);
@@ -434,9 +438,13 @@ export const syncSupabaseWishlist = async (userId: string, productIds: string[])
     
     // Dynamically retrieve the absolute authenticated user ID to align with RLS policies
     let finalUserId = userId;
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (authUser) {
-      finalUserId = authUser.id;
+    try {
+      const { data: authUserRes } = await supabase.auth.getUser();
+      if (authUserRes && authUserRes.user) {
+        finalUserId = authUserRes.user.id;
+      }
+    } catch (authErr) {
+      console.warn(`[Supabase Wishlist Sync] Failed dynamically checking auth state. Relying on supplied ID: ${userId}`, authErr);
     }
 
     console.log(`[Supabase Wishlist] Synchronizing user wishlist with table: ${tableName} for user ID: ${finalUserId}, item count: ${productIds.length}`);
@@ -520,12 +528,16 @@ export const toggleSupabaseWishlistItem = async (userId: string, productId: stri
     
     // Dynamically retrieve the absolute authenticated user ID to align with RLS policies
     let finalUserId = userId;
-    const { data: { user: authUser } } = await supabase.auth.getUser();
-    if (authUser) {
-      finalUserId = authUser.id;
-      console.log(`[Supabase Wishlist] Verified active dynamic auth user ID: ${finalUserId}`);
-    } else {
-      console.warn(`[Supabase Wishlist] No active auth session found for toggle. Using provided ID: ${userId}`);
+    try {
+      const { data: authUserRes } = await supabase.auth.getUser();
+      if (authUserRes && authUserRes.user) {
+        finalUserId = authUserRes.user.id;
+        console.log(`[Supabase Wishlist] Verified active dynamic auth user ID: ${finalUserId}`);
+      } else {
+        console.warn(`[Supabase Wishlist] No active auth session found for toggle. Using provided ID: ${userId}`);
+      }
+    } catch (authErr) {
+      console.warn(`[Supabase Wishlist Toggle] Failed dynamically checking auth state. Relying on supplied ID: ${userId}`, authErr);
     }
 
     console.log(`[Supabase Wishlist] Toggling wishlist: user ${finalUserId}, product ${productId}, isAdding: ${isAdding} on table: ${tableName}`);

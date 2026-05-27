@@ -1803,10 +1803,18 @@ const MobileMenu = ({ isOpen, onClose, user }: { isOpen: boolean; onClose: () =>
 );
 
 const PremiumLoader = ({ onComplete }: { onComplete: () => void; key?: string }) => {
+  const onCompleteRef = React.useRef(onComplete);
+
   useEffect(() => {
-    const timer = setTimeout(onComplete, 1800);
-    return () => clearTimeout(timer);
+    onCompleteRef.current = onComplete;
   }, [onComplete]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onCompleteRef.current();
+    }, 1800);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <motion.div 
@@ -3269,9 +3277,15 @@ const ProfilePage = ({
 
           <button
             onClick={async () => {
-              if (isSupabaseConfigured && supabase) {
-                await supabase.auth.signOut();
-              } else {
+              try {
+                if (isSupabaseConfigured && supabase) {
+                  await supabase.auth.signOut();
+                } else {
+                  localStorage.removeItem("pingaksh_mock_user");
+                  window.location.reload();
+                }
+              } catch (err) {
+                console.error("Critical error while signing out from Supabase:", err);
                 localStorage.removeItem("pingaksh_mock_user");
                 window.location.reload();
               }
@@ -3712,52 +3726,60 @@ export default function App() {
     if (isSupabaseConfigured && supabase) {
       // Supabase Authentication listener
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === "PASSWORD_RECOVERY") {
-          localStorage.setItem("pk_reset_mode", "true");
-          if (window.location.pathname !== "/update-password") {
-            window.location.href = "/update-password";
-          }
-        }
-        if (session?.user) {
-          const userMeta = session.user.user_metadata || {};
-          let name = userMeta.displayName || userMeta.name || userMeta.full_name || session.user.email?.split("@")[0] || "Exalted Collector";
-          let role = "customer";
-
-          // Load current user profile dynamically from Supabase profiles table
-          try {
-            const profile = await getSupabaseProfile(session.user.id);
-            if (profile) {
-              name = profile.name || name;
-              role = profile.role || role;
-            } else {
-              // Self-healing: if auth user exists but profile wasn't fully saved, save it now
-              await saveSupabaseProfile(session.user.id, name, session.user.email || "");
+        try {
+          if (event === "PASSWORD_RECOVERY") {
+            localStorage.setItem("pk_reset_mode", "true");
+            if (window.location.pathname !== "/update-password") {
+              window.location.href = "/update-password";
             }
-          } catch (profileErr) {
-            console.error("Failed loading user profile dynamically:", profileErr);
           }
+          if (session?.user) {
+            const userMeta = session.user.user_metadata || {};
+            let name = userMeta.displayName || userMeta.name || userMeta.full_name || session.user.email?.split("@")[0] || "Exalted Collector";
+            let role = "customer";
 
-          setUser({
-            uid: session.user.id,
-            email: session.user.email || null,
-            displayName: name,
-            role: role
-          } as any);
-
-          // Dynamically load Wishlist from Supabase per user
-          try {
-            const dbWishlist = await getSupabaseWishlist(session.user.id);
-            if (dbWishlist) {
-              setWishlist(dbWishlist);
-              localStorage.setItem("pingaksh_wishlist", JSON.stringify(dbWishlist));
+            // Load current user profile dynamically from Supabase profiles table
+            try {
+              const profile = await getSupabaseProfile(session.user.id);
+              if (profile) {
+                name = profile.name || name;
+                role = profile.role || role;
+              } else {
+                // Self-healing: if auth user exists but profile wasn't fully saved, save it now
+                await saveSupabaseProfile(session.user.id, name, session.user.email || "");
+              }
+            } catch (profileErr) {
+              console.error("Failed loading user profile dynamically:", profileErr);
             }
-          } catch (wishlistErr) {
-            console.error("Failed loading user wishlist from database:", wishlistErr);
+
+            setUser({
+              uid: session.user.id,
+              email: session.user.email || null,
+              displayName: name,
+              role: role
+            } as any);
+
+            // Dynamically load Wishlist from Supabase per user
+            try {
+              const dbWishlist = await getSupabaseWishlist(session.user.id);
+              if (dbWishlist && Array.isArray(dbWishlist)) {
+                setWishlist(dbWishlist);
+                localStorage.setItem("pingaksh_wishlist", JSON.stringify(dbWishlist));
+              } else {
+                setWishlist([]);
+              }
+            } catch (wishlistErr) {
+              console.error("Failed loading user wishlist from database:", wishlistErr);
+              setWishlist([]);
+            }
+          } else {
+            setUser(null);
           }
-        } else {
-          setUser(null);
+        } catch (err) {
+          console.error("Error inside onAuthStateChange callback helper:", err);
+        } finally {
+          setIsAuthReady(true);
         }
-        setIsAuthReady(true);
       });
       
       unsubscribeAuth = () => {
@@ -4374,9 +4396,15 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
   };
 
   const handleLogout = async () => {
-    if (isSupabaseConfigured && supabase) {
-      await supabase.auth.signOut();
-    } else {
+    try {
+      if (isSupabaseConfigured && supabase) {
+        await supabase.auth.signOut();
+      } else {
+        localStorage.removeItem("pingaksh_mock_user");
+        window.location.reload();
+      }
+    } catch (err) {
+      console.error("Critical error while signing out in admin dashboard:", err);
       localStorage.removeItem("pingaksh_mock_user");
       window.location.reload();
     }
