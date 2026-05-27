@@ -3747,68 +3747,112 @@ export default function App() {
     let unsubscribeWatches: (() => void) | null = null;
 
     if (isSupabaseConfigured && supabase) {
+      // Helper function with a fallback timer to cancel hanging promises
+      const withTimeout = <T,>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> => {
+        return Promise.race([
+          promise,
+          new Promise<T>((resolve) => setTimeout(() => {
+            console.warn(`[Supabase Resiliency] Async call exceeded ${timeoutMs}ms. Returning fallback.`);
+            resolve(fallback);
+          }, timeoutMs))
+        ]);
+      };
+
       const handleSessionChange = async (session: any) => {
         try {
           if (session?.user) {
+            console.log("[Auth Session Change] Logged-in user detected:", session.user.id);
             const userMeta = session.user.user_metadata || {};
-            let name = userMeta.displayName || userMeta.name || userMeta.full_name || session.user.email?.split("@")[0] || "Exalted Collector";
-            let role = "customer";
+            const initialName = userMeta.displayName || userMeta.name || userMeta.full_name || session.user.email?.split("@")[0] || "Exalted Collector";
+            const initialRole = "customer";
 
-            // Load current user profile dynamically from Supabase profiles table
-            try {
-              const profile = await getSupabaseProfile(session.user.id);
-              if (profile) {
-                name = profile.name || name;
-                role = profile.role || role;
-              } else {
-                // Self-healing: if auth user exists but profile wasn't fully saved, save it now
-                await saveSupabaseProfile(session.user.id, name, session.user.email || "");
-              }
-            } catch (profileErr) {
-              console.error("Failed loading user profile dynamically:", profileErr);
-            }
-
+            // Optimize: Update user state instantly to reflect authentic identity without waiting for slow DB reads
             setUser({
               uid: session.user.id,
               email: session.user.email || null,
-              displayName: name,
-              role: role
+              displayName: initialName,
+              role: initialRole
             } as any);
 
-            // Dynamically load Wishlist from Supabase per user
-            try {
-              const dbWishlist = await getSupabaseWishlist(session.user.id);
-              if (dbWishlist && Array.isArray(dbWishlist)) {
-                setWishlist(dbWishlist);
-                localStorage.setItem("pingaksh_wishlist", JSON.stringify(dbWishlist));
-              } else {
-                setWishlist([]);
+            // CRITICAL: Unlock main app loading state instantly! This avoids infinite spinner screen entirely.
+            setIsAuthReady(true);
+
+            // Execute cloud-syncing operations in a completely non-blocking, asynchronous scope
+            (async () => {
+              try {
+                console.log("[Auth Background] Querying user profile from DB...");
+                const profilePromise = getSupabaseProfile(session.user.id);
+                // Fail-safe limit profile fetch to 1.5 seconds maximum
+                const profile = await withTimeout(profilePromise, 1500, null);
+
+                let finalName = initialName;
+                let finalRole = initialRole;
+
+                if (profile) {
+                  finalName = profile.name || finalName;
+                  finalRole = profile.role || finalRole;
+
+                  setUser({
+                    uid: session.user.id,
+                    email: session.user.email || null,
+                    displayName: finalName,
+                    role: finalRole
+                  } as any);
+                  console.log("[Auth Background] Profile successfully updated from database:", profile);
+                } else {
+                  console.log("[Auth Background] Profile record not present. Creating self-healing record...");
+                  // Timeout profile saving after 2 seconds to avoid any queue congestion
+                  const savePromise = saveSupabaseProfile(session.user.id, initialName, session.user.email || "");
+                  await withTimeout(savePromise, 2000, null);
+                }
+              } catch (profileErr) {
+                console.error("[Auth Background Exception] User profile loading background routine failed:", profileErr);
               }
-            } catch (wishlistErr) {
-              console.error("Failed loading user wishlist from database:", wishlistErr);
-              setWishlist([]);
-            }
+
+              try {
+                console.log("[Auth Background] Loading user wishlist from DB...");
+                const wishlistPromise = getSupabaseWishlist(session.user.id);
+                // Fail-safe limit wishlist fetch to 2.5 seconds maximum
+                const dbWishlist = await withTimeout(wishlistPromise, 2500, []);
+
+                if (dbWishlist && Array.isArray(dbWishlist)) {
+                  setWishlist(dbWishlist);
+                  localStorage.setItem("pingaksh_wishlist", JSON.stringify(dbWishlist));
+                  console.log("[Auth Background] Wishlist resolved and set successfully:", dbWishlist);
+                } else {
+                  console.warn("[Auth Background] Invalid or empty wishlist response received. Reverting to empty array.");
+                  setWishlist([]);
+                }
+              } catch (wishlistErr) {
+                console.error("[Auth Background Exception] Failed loading user wishlist from database:", wishlistErr);
+              }
+            })();
+
           } else {
+            console.log("[Auth Session Change] Guest user detected or logged out.");
             setUser(null);
             setCloudCartFetched(false);
             setCart([]);
             setWishlist([]);
             localStorage.removeItem("pingaksh_wishlist");
+            setIsAuthReady(true);
           }
         } catch (err) {
-          console.error("Error in handleSessionChange helper:", err);
-        } finally {
+          console.error("[Session Process Error] Failed inside handleSessionChange:", err);
           setIsAuthReady(true);
         }
       };
 
-      // Get initial session right away for instantaneous response
+      // Get initial session with a safe timeout pattern to ensure instantaneous app responsiveness
       const fetchInitialSession = async () => {
         try {
-          const { data: { session } } = await supabase.auth.getSession();
+          console.log("[Auth Init] Checking current active authentication session...");
+          const getSessionPromise = supabase.auth.getSession().then(({ data }) => data.session);
+          // Set a strict 1.5-second timeout on initial session fetch
+          const session = await withTimeout(getSessionPromise, 1500, null);
           await handleSessionChange(session);
         } catch (err) {
-          console.error("Failed to query initial session from Supabase:", err);
+          console.error("[Auth Init Exception] Failed to query initial session from Supabase on start:", err);
           setIsAuthReady(true);
         }
       };
@@ -3817,6 +3861,7 @@ export default function App() {
       // Supabase Authentication listener
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         try {
+          console.log("[Auth Event] Received Supabase authentication event:", event);
           if (event === "PASSWORD_RECOVERY") {
             localStorage.setItem("pk_reset_mode", "true");
             if (window.location.pathname !== "/update-password") {
@@ -3825,7 +3870,7 @@ export default function App() {
           }
           await handleSessionChange(session);
         } catch (err) {
-          console.error("Error inside onAuthStateChange callback helper:", err);
+          console.error("[Auth Listener Exception] Error inside onAuthStateChange callback helper:", err);
           setIsAuthReady(true);
         }
       });

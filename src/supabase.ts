@@ -449,27 +449,34 @@ export const getSupabaseWishlist = async (userId: string): Promise<string[]> => 
       "Stellar Rose": "6"
     };
 
+    // Initialize with direct product IDs retrieved
     for (const pid of productIds) {
       if (!expandedIds.includes(pid)) {
         expandedIds.push(pid);
       }
+    }
+
+    if (productIds.length > 0) {
       try {
-        const { data: nameData } = await supabase
+        console.log(`[Supabase Wishlist Batch Query] Matching product details for IDs:`, productIds);
+        const { data: productsData, error: batchErr } = await supabase
           .from("products")
-          .select("name")
-          .eq("id", pid)
-          .limit(1);
+          .select("id, name")
+          .in("id", productIds);
         
-        if (nameData && nameData.length > 0) {
-          const name = nameData[0].name;
-          const matchedMockId = localMap[name];
-          if (matchedMockId && !expandedIds.includes(matchedMockId)) {
-            expandedIds.push(matchedMockId);
-            console.log(`[Supabase Wishlist Map] Bidirectional mapped DB UUID "${pid}" to local mock ID "${matchedMockId}" (${name})`);
+        if (batchErr) throw batchErr;
+
+        if (productsData && productsData.length > 0) {
+          for (const item of productsData) {
+            const matchedMockId = localMap[item.name];
+            if (matchedMockId && !expandedIds.includes(matchedMockId)) {
+              expandedIds.push(matchedMockId);
+              console.log(`[Supabase Wishlist Map] Bidirectional mapped DB UUID "${item.id}" to local mock ID "${matchedMockId}" (${item.name})`);
+            }
           }
         }
       } catch (mapErr) {
-        console.warn(`[Supabase Wishlist Map Warn] Failed mapping UUID ${pid} to local ID:`, mapErr);
+        console.warn(`[Supabase Wishlist Map Warn] Failed batch mapping product UUIDs to local IDs:`, mapErr);
       }
     }
 
