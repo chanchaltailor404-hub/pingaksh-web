@@ -1085,8 +1085,8 @@ const Checkout = ({
   const saveOrderToDatabase = async () => {
     if (isSupabaseConfigured && supabase) {
       try {
-        const authUserRes = await supabase.auth.getUser();
-        const activeUid = authUserRes.data.user?.id || null;
+        const { data: authUserRes } = await supabase.auth.getUser();
+        const activeUid = authUserRes?.user?.id || null;
         await createSupabaseOrder(
           activeUid,
           formData.email,
@@ -3198,8 +3198,8 @@ const ProfilePage = ({
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
 
   useEffect(() => {
-    if (!user) return;
-    if (isSupabaseConfigured && supabase && user) {
+    if (!user?.uid) return;
+    if (isSupabaseConfigured && supabase && user?.uid) {
       getSupabaseOrders(user.uid)
         .then((dbOrders) => {
           const formatted = dbOrders.map(ord => ({
@@ -3211,13 +3211,16 @@ const ProfilePage = ({
               name: it.product_name,
               price: Number(it.price),
               quantity: it.quantity,
-              image: watches.find(w => w.name === it.product_name)?.image || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800"
+              image: (watches.length > 0 ? watches : WATCHES).find(w => w.name === it.product_name)?.image || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800"
             })) || [],
             status: ord.status
           }));
           setCustomerOrders(formatted);
         })
-        .catch(err => console.error("Error loading Supabase user orders:", err));
+        .catch(err => {
+          console.error("Error loading Supabase user orders:", err);
+          setCustomerOrders([]);
+        });
     } else {
       try {
         const saved = localStorage.getItem("pingaksh_customer_orders");
@@ -3226,7 +3229,7 @@ const ProfilePage = ({
         setCustomerOrders([]);
       }
     }
-  }, [user, watches]);
+  }, [user?.uid, watches]);
 
   // Redirect to login if user session is lost
   useEffect(() => {
@@ -3672,6 +3675,26 @@ export default function App() {
   const [user, setUser] = useState<CustomUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showLoader, setShowLoader] = useState(true);
+  const [loaderTimeoutDone, setLoaderTimeoutDone] = useState(false);
+  const [cloudCartFetched, setCloudCartFetched] = useState(false);
+
+  useEffect(() => {
+    if (isAuthReady && loaderTimeoutDone) {
+      setShowLoader(false);
+    }
+  }, [isAuthReady, loaderTimeoutDone]);
+
+  useEffect(() => {
+    // Fail-safe protection: force isAuthReady to true after absolute maximum duration of 4 seconds
+    const fallbackTimer = setTimeout(() => {
+      if (!isAuthReady) {
+        console.warn("[Auth Fail-Safe] Forcing isAuthReady to true due to session loading bottleneck.");
+        setIsAuthReady(true);
+      }
+    }, 4000);
+    return () => clearTimeout(fallbackTimer);
+  }, [isAuthReady]);
+
   const [selectedWatch, setSelectedWatch] = useState<Watch | null>(null);
   const [wishlist, setWishlist] = useState<string[]>(() => {
     try {
@@ -3724,15 +3747,8 @@ export default function App() {
     let unsubscribeWatches: (() => void) | null = null;
 
     if (isSupabaseConfigured && supabase) {
-      // Supabase Authentication listener
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const handleSessionChange = async (session: any) => {
         try {
-          if (event === "PASSWORD_RECOVERY") {
-            localStorage.setItem("pk_reset_mode", "true");
-            if (window.location.pathname !== "/update-password") {
-              window.location.href = "/update-password";
-            }
-          }
           if (session?.user) {
             const userMeta = session.user.user_metadata || {};
             let name = userMeta.displayName || userMeta.name || userMeta.full_name || session.user.email?.split("@")[0] || "Exalted Collector";
@@ -3774,10 +3790,42 @@ export default function App() {
             }
           } else {
             setUser(null);
+            setCloudCartFetched(false);
+            setCart([]);
+            setWishlist([]);
+            localStorage.removeItem("pingaksh_wishlist");
           }
         } catch (err) {
-          console.error("Error inside onAuthStateChange callback helper:", err);
+          console.error("Error in handleSessionChange helper:", err);
         } finally {
+          setIsAuthReady(true);
+        }
+      };
+
+      // Get initial session right away for instantaneous response
+      const fetchInitialSession = async () => {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          await handleSessionChange(session);
+        } catch (err) {
+          console.error("Failed to query initial session from Supabase:", err);
+          setIsAuthReady(true);
+        }
+      };
+      fetchInitialSession();
+
+      // Supabase Authentication listener
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        try {
+          if (event === "PASSWORD_RECOVERY") {
+            localStorage.setItem("pk_reset_mode", "true");
+            if (window.location.pathname !== "/update-password") {
+              window.location.href = "/update-password";
+            }
+          }
+          await handleSessionChange(session);
+        } catch (err) {
+          console.error("Error inside onAuthStateChange callback helper:", err);
           setIsAuthReady(true);
         }
       });
@@ -3790,21 +3838,34 @@ export default function App() {
       const loadSupabaseProducts = async () => {
         try {
           const dbProducts = await getSupabaseProducts();
-          if (dbProducts.length > 0) {
+          if (dbProducts && dbProducts.length > 0) {
             setWatches(dbProducts as Watch[]);
           } else {
-            // Table is empty, seed initial WATCHES array
-            for (const item of WATCHES) {
-              await supabase.from("products").insert({
-                name: item.name,
-                price: item.price,
-                image: item.image,
-                category: item.category,
-                description: item.description
-              });
+            // Table might be empty or query returned empty. Seed initial static WATCHES catalog safely.
+            try {
+              console.log("[Supabase Seeding] Seeding initial watches database...");
+              for (const item of WATCHES) {
+                const { error: insertErr } = await supabase.from("products").insert({
+                  name: item.name,
+                  price: item.price,
+                  image: item.image,
+                  category: item.category,
+                  description: item.description
+                });
+                if (insertErr) {
+                  console.warn("[Supabase Seeding] Product seed insert item warn:", insertErr.message);
+                }
+              }
+              const synced = await getSupabaseProducts();
+              if (synced && synced.length > 0) {
+                setWatches(synced as Watch[]);
+              } else {
+                setWatches(WATCHES);
+              }
+            } catch (seedErr) {
+              console.error("[Supabase Seeding Exception] Failed to seed products table:", seedErr);
+              setWatches(WATCHES);
             }
-            const synced = await getSupabaseProducts();
-            setWatches(synced as Watch[]);
           }
         } catch (err) {
           console.error("Supabase products load failed. Falling back to local catalog:", err);
@@ -3851,7 +3912,7 @@ export default function App() {
 
   // 3. Deep Sync User Cart items to Supabase cloud database
   useEffect(() => {
-    if (isSupabaseConfigured && supabase && user) {
+    if (isSupabaseConfigured && supabase && user?.uid && cloudCartFetched) {
       const syncCloudCart = async () => {
         try {
           await syncSupabaseCart(
@@ -3864,15 +3925,15 @@ export default function App() {
       };
       syncCloudCart();
     }
-  }, [cart, user]);
+  }, [cart, user?.uid, cloudCartFetched]);
 
   // 4. Fetch/consolidate Cloud cart upon authentication
   useEffect(() => {
-    if (isSupabaseConfigured && supabase && user && watches.length > 0) {
+    if (isSupabaseConfigured && supabase && user?.uid && watches.length > 0 && !cloudCartFetched) {
       const fetchCloudCart = async () => {
         try {
           const dbCart = await getSupabaseCart(user.uid);
-          if (dbCart.length > 0) {
+          if (dbCart && dbCart.length > 0) {
             const resolvedCart = dbCart.map(item => {
               const matchedWatch = watches.find(w => w.id === item.product_id);
               if (matchedWatch) {
@@ -3886,11 +3947,13 @@ export default function App() {
           }
         } catch (err) {
           console.error("Failed fetching user database cart from Supabase", err);
+        } finally {
+          setCloudCartFetched(true);
         }
       };
       fetchCloudCart();
     }
-  }, [user, watches.length]);
+  }, [user?.uid, watches.length, cloudCartFetched]);
 
   const addToCart = (watch: Watch) => {
     setCart(prev => {
@@ -3923,7 +3986,7 @@ export default function App() {
   return (
     <AnimatePresence mode="wait">
       {(!isAuthReady || showLoader) ? (
-        <PremiumLoader key="loader" onComplete={() => { if (isAuthReady) setShowLoader(false); }} />
+        <PremiumLoader key="loader" onComplete={() => setLoaderTimeoutDone(true)} />
       ) : (
         <div key="app">
           <Router>

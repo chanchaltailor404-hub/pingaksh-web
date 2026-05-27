@@ -71,32 +71,42 @@ export interface SupabaseOrder {
 // 1. Products Operations
 export const getSupabaseProducts = async (): Promise<SupabaseProduct[]> => {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("products")
-    .select("*")
-    .order("name", { ascending: true });
-  
-  if (error) {
-    console.error("Failed to load products from Supabase", error);
-    throw error;
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .order("name", { ascending: true });
+    
+    if (error) {
+      console.error("[Supabase Products] Failed to load products from database:", error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Products Exception] Failed inside getSupabaseProducts query:", err);
+    return [];
   }
-  return data || [];
 };
 
 // 2. Profile / User Operations
 export const getSupabaseProfile = async (uid: string): Promise<SupabaseProfile | null> => {
   if (!supabase) return null;
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", uid)
-    .single();
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", uid)
+      .single();
 
-  if (error) {
-    console.error("Error returning profile from Supabase profiles", error);
+    if (error) {
+      console.error("[Supabase Profile] Error returning profile from Supabase profiles:", error);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error("[Supabase Profile Exception] failed inside getSupabaseProfile query:", err);
     return null;
   }
-  return data;
 };
 
 // 3. Dynamic Schema / Table Detections for Maximum Resilience
