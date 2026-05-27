@@ -46,7 +46,6 @@ export interface CustomUser {
   email: string | null;
   displayName: string;
 }
-type FirebaseUser = CustomUser; // Maintains backward-compatible type references across all custom dashboard components
 import { 
   isSupabaseConfigured,
   supabase,
@@ -166,7 +165,7 @@ const Navbar = ({
 }: { 
   cartCount: number; 
   onCartClick: () => void; 
-  user: FirebaseUser | null;
+  user: CustomUser | null;
   onSearchClick: () => void;
   onMenuClick: () => void;
 }) => {
@@ -1764,7 +1763,7 @@ const SearchOverlay = ({ isOpen, onClose, watches, onAddToCart }: {
   );
 };
 
-const MobileMenu = ({ isOpen, onClose, user }: { isOpen: boolean; onClose: () => void; user: FirebaseUser | null }) => (
+const MobileMenu = ({ isOpen, onClose, user }: { isOpen: boolean; onClose: () => void; user: CustomUser | null }) => (
   <AnimatePresence>
     {isOpen && (
       <motion.div 
@@ -2665,7 +2664,7 @@ const ProductPage = ({
 type AuthMode = "login" | "signup" | "forgot" | "reset";
 
 interface AuthPageProps {
-  user: FirebaseUser | null;
+  user: CustomUser | null;
   modeOverride?: AuthMode;
 }
 
@@ -3118,7 +3117,7 @@ const AuthPage = ({ user, modeOverride }: AuthPageProps) => {
 // --- Client/User Profile Dashboard ---
 
 interface ProfilePageProps {
-  user: FirebaseUser | null;
+  user: CustomUser | null;
   wishlist: string[];
   onToggleWishlist: (id: string) => void;
   onAddToCart: (watch: Watch) => void;
@@ -3656,7 +3655,7 @@ export default function App() {
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<CustomUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showLoader, setShowLoader] = useState(true);
   const [selectedWatch, setSelectedWatch] = useState<Watch | null>(null);
@@ -4260,7 +4259,7 @@ const FAQ = () => {
 
 // --- Admin Dashboard Component ---
 
-const AdminDashboard = ({ user }: { user: FirebaseUser | null }) => {
+const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
   const [watches, setWatches] = useState<Watch[]>([]);
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
