@@ -325,17 +325,48 @@ export const subscribeNewsletter = async (email: string): Promise<void> => {
 
 // 9. Profile Saving Operation
 export const saveSupabaseProfile = async (uid: string, name: string, email: string) => {
-  if (!supabase) return;
-  const { error } = await supabase
-    .from("profiles")
-    .upsert({
-      id: uid,
-      name,
-      email,
-      role: email === "chanchaltailor404@gmail.com" ? "admin" : "customer"
-    });
+  if (!supabase) {
+    console.warn("Supabase is not configured. Skipping profile database write.");
+    return;
+  }
   
-  if (error) {
-    console.error("Error saving user profile to Supabase:", error);
+  try {
+    console.log(`Checking if profile already exists for uid: ${uid}...`);
+    const { data: existing, error: checkError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("id", uid);
+
+    if (checkError) {
+      console.error("Error checking existing profiles in Supabase profiles:", checkError);
+    }
+
+    if (existing && existing.length > 0) {
+      console.log(`Profile with id ${uid} already exists. Skipping insert to prevent duplication.`);
+      return;
+    }
+
+    const payload = {
+      id: uid,
+      name: name || email.split("@")[0] || "Exalted Collector",
+      email: email,
+      role: email === "chanchaltailor404@gmail.com" ? "admin" : "customer",
+      created_at: new Date().toISOString()
+    };
+
+    console.log("Saving new profile to Supabase profiles:", payload);
+    const { error: insertError } = await supabase
+      .from("profiles")
+      .insert(payload);
+
+    if (insertError) {
+      console.error("Failed to insert profile into Database:", insertError);
+      throw insertError;
+    }
+
+    console.log(`Successfully created user profile in profiles table for uid: ${uid}`);
+  } catch (err) {
+    console.error("Exception handled inside saveSupabaseProfile:", err);
+    throw err;
   }
 };
