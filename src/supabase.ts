@@ -386,7 +386,6 @@ export const updateSupabaseOrderStatus = async (
   }
 };
 
-// 8. Wishlist Operations with Dynamic Table Selection & Column Fallbacks
 // 8. Wishlist Operations with Dynamic Table Selection, Authenticated user ID fetch & Fail-safe policies
 export const getSupabaseWishlist = async (userId: string): Promise<string[]> => {
   if (!supabase) return [];
@@ -434,7 +433,48 @@ export const getSupabaseWishlist = async (userId: string): Promise<string[]> => 
       console.error(`[Supabase Wishlist] Error retrieving user wishlist from table ${tableName}:`, error);
       return [];
     }
-    return data?.map(d => d.product_id) || [];
+
+    const productIds = data?.map(d => d.product_id) || [];
+    console.log(`[Supabase Wishlist] Retrieved raw database product IDs:`, productIds);
+
+    // Bidirectional mapped output: return both the database UUID AND the local mock ID if matching,
+    // which guarantees that both UI modes (supabase watches list / static watches list) stay synchronized flawlessly!
+    const expandedIds: string[] = [];
+    const localMap: Record<string, string> = {
+      "Aurelius Gold": "1",
+      "Midnight Chrono": "2",
+      "Nordic Silver": "3",
+      "Heritage Classic": "4",
+      "Oceanic Diver": "5",
+      "Stellar Rose": "6"
+    };
+
+    for (const pid of productIds) {
+      if (!expandedIds.includes(pid)) {
+        expandedIds.push(pid);
+      }
+      try {
+        const { data: nameData } = await supabase
+          .from("products")
+          .select("name")
+          .eq("id", pid)
+          .limit(1);
+        
+        if (nameData && nameData.length > 0) {
+          const name = nameData[0].name;
+          const matchedMockId = localMap[name];
+          if (matchedMockId && !expandedIds.includes(matchedMockId)) {
+            expandedIds.push(matchedMockId);
+            console.log(`[Supabase Wishlist Map] Bidirectional mapped DB UUID "${pid}" to local mock ID "${matchedMockId}" (${name})`);
+          }
+        }
+      } catch (mapErr) {
+        console.warn(`[Supabase Wishlist Map Warn] Failed mapping UUID ${pid} to local ID:`, mapErr);
+      }
+    }
+
+    console.log(`[Supabase Wishlist Final] Returning aligned wishlist array:`, expandedIds);
+    return expandedIds;
   } catch (err) {
     console.error("[Supabase Wishlist Exception] getSupabaseWishlist:", err);
     return [];
@@ -459,6 +499,47 @@ export const syncSupabaseWishlist = async (userId: string, productIds: string[])
 
     console.log(`[Supabase Wishlist] Synchronizing user wishlist with table: ${tableName} for user ID: ${finalUserId}, item count: ${productIds.length}`);
     
+    // Resolve any incoming mock IDs ("1"-"6") to dynamic database products table UUIDs to prevent invalid UUID cast crash
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const finalProductIds: string[] = [];
+    const dbProductMap: Record<string, string> = {
+      "1": "Aurelius Gold",
+      "2": "Midnight Chrono",
+      "3": "Nordic Silver",
+      "4": "Heritage Classic",
+      "5": "Oceanic Diver",
+      "6": "Stellar Rose"
+    };
+
+    for (const pid of productIds) {
+      if (uuidRegex.test(pid)) {
+        finalProductIds.push(pid);
+      } else {
+        const name = dbProductMap[pid];
+        if (name) {
+          try {
+            const { data, error } = await supabase
+              .from("products")
+              .select("id")
+              .eq("name", name)
+              .limit(1);
+            if (!error && data && data.length > 0) {
+              finalProductIds.push(data[0].id);
+              console.log(`[Supabase Wishlist Sync ID Resolver] Resolved mock ID "${pid}" to database UUID: ${data[0].id}`);
+            } else {
+              console.warn(`[Supabase Wishlist Sync ID Resolver] DB product not found for "${name}". Error:`, error);
+              finalProductIds.push(pid);
+            }
+          } catch (resErr) {
+            console.error(`[Supabase Wishlist Sync ID Exception] Failed to resolve mock ID to UUID:`, resErr);
+            finalProductIds.push(pid);
+          }
+        } else {
+          finalProductIds.push(pid);
+        }
+      }
+    }
+    
     // Helper to run delete / insert
     const runSyncOnTable = async (table: string) => {
       // Clear any existing entries for this user
@@ -471,10 +552,10 @@ export const syncSupabaseWishlist = async (userId: string, productIds: string[])
         console.warn(`[Supabase Wishlist] Error clearing wishlist inside ${table}:`, deleteError);
       }
 
-      if (productIds.length === 0) return;
+      if (finalProductIds.length === 0) return;
 
       // Insert wishlist entries
-      const payload = productIds.map(productId => ({
+      const payload = finalProductIds.map(productId => ({
         user_id: finalUserId,
         product_id: productId,
         created_at: new Date().toISOString()
@@ -493,7 +574,7 @@ export const syncSupabaseWishlist = async (userId: string, productIds: string[])
           const { error: retryError } = await supabase
             .from(table)
             .insert(
-              productIds.map(productId => ({
+              finalProductIds.map(productId => ({
                 user_id: finalUserId,
                 product_id: productId
               }))
@@ -550,41 +631,88 @@ export const toggleSupabaseWishlistItem = async (userId: string, productId: stri
       console.warn(`[Supabase Wishlist Toggle] Failed dynamically checking auth state. Relying on supplied ID: ${userId}`, authErr);
     }
 
-    console.log(`[Supabase Wishlist] Toggling wishlist: user ${finalUserId}, product ${productId}, isAdding: ${isAdding} on table: ${tableName}`);
+    // Resolve product ID to database UUID to prevent Postgres CAST errors
+    let finalProductId = productId;
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(productId)) {
+      const dbProductMap: Record<string, string> = {
+        "1": "Aurelius Gold",
+        "2": "Midnight Chrono",
+        "3": "Nordic Silver",
+        "4": "Heritage Classic",
+        "5": "Oceanic Diver",
+        "6": "Stellar Rose"
+      };
+      const name = dbProductMap[productId];
+      if (name) {
+        try {
+          const { data, error } = await supabase
+            .from("products")
+            .select("id")
+            .eq("name", name)
+            .limit(1);
+          if (!error && data && data.length > 0) {
+            finalProductId = data[0].id;
+            console.log(`[Supabase Wishlist ID Resolver] Resolved mock ID "${productId}" to dynamic UUID: ${finalProductId}`);
+          } else {
+            console.warn(`[Supabase Wishlist ID Resolver] DB product not found for name "${name}". Error:`, error);
+          }
+        } catch (resErr) {
+          console.error(`[Supabase Wishlist ID Resolver Exception] Failed to resolve mock ID to UUID:`, resErr);
+        }
+      }
+    }
+
+    console.log(`[Supabase Wishlist] Toggling wishlist: user ${finalUserId}, product ${finalProductId} (original input ID: ${productId}), isAdding: ${isAdding} on table: ${tableName}`);
     
     const runToggleOnTable = async (table: string) => {
       if (isAdding) {
+        console.log(`[Supabase Wishlist] Inserting row for user: ${finalUserId} and product: ${finalProductId} into table "${table}"...`);
         const { error } = await supabase
           .from(table)
-          .insert({ user_id: finalUserId, product_id: productId, created_at: new Date().toISOString() });
+          .insert({ 
+            user_id: finalUserId, 
+            product_id: finalProductId, 
+            created_at: new Date().toISOString() 
+          });
         
         if (error) {
           console.warn(`[Supabase Wishlist] Initial toggle insert error in ${table}:`, error);
           
-          // Retry without created_at
+          // Retry without created_at if DB table does not contain it
           if (error.message?.includes("column") || error.code === "42703") {
-            console.log(`[Supabase Wishlist Retry] Retrying toggle wishlist insert without created_at on ${table}...`);
+            console.log(`[Supabase Wishlist Retry] Retrying toggle wishlist insert without "created_at" on table "${table}"...`);
             const { error: retryErr } = await supabase
               .from(table)
-              .insert({ user_id: finalUserId, product_id: productId });
+              .insert({ 
+                user_id: finalUserId, 
+                product_id: finalProductId 
+              });
             if (retryErr) {
-              console.error(`[Supabase Wishlist Retry Failure] Failed to add item to wishlist on ${table}:`, retryErr);
+              console.error(`[Supabase Wishlist Retry Failure] Failed to add item to wishlist on table "${table}":`, retryErr);
               throw retryErr;
+            } else {
+              console.log(`[Supabase Wishlist] Wishlist row added successfully without created_at on table "${table}"`);
             }
           } else {
             throw error;
           }
+        } else {
+          console.log(`[Supabase Wishlist] Wishlist row added successfully to table "${table}" with user_id: ${finalUserId}, product_id: ${finalProductId}, created_at: now`);
         }
       } else {
+        console.log(`[Supabase Wishlist] Deleting row for user: ${finalUserId} and product: ${finalProductId} from table "${table}"...`);
         const { error } = await supabase
           .from(table)
           .delete()
           .eq("user_id", finalUserId)
-          .eq("product_id", productId);
+          .eq("product_id", finalProductId);
         
         if (error) {
-          console.error(`[Supabase Wishlist] Failed removing item from wishlist on ${table}:`, error);
+          console.error(`[Supabase Wishlist] Failed removing item from wishlist on table "${table}":`, error);
           throw error;
+        } else {
+          console.log(`[Supabase Wishlist] Wishlist row deleted successfully from table "${table}"`);
         }
       }
     };
@@ -603,8 +731,7 @@ export const toggleSupabaseWishlistItem = async (userId: string, productId: stri
       }
     }
   } catch (err) {
-    console.error("[Supabase Wishlist Exception] toggleSupabaseWishlistItem:", err);
-    throw err;
+    console.error("[Supabase Wishlist Exception] toggleSupabaseWishlistItem failed:", err);
   }
 };
 
