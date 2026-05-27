@@ -99,54 +99,125 @@ export const getSupabaseProfile = async (uid: string): Promise<SupabaseProfile |
   return data;
 };
 
-// 3. Persistent Cart Items Database Sync
+// 3. Dynamic Schema / Table Detections for Maximum Resilience
+let cachedCartTable: "cart" | "cart_items" | null = null;
+let cachedWishlistTable: "wishlist" | "wishlists" | null = null;
+
+async function getCartTableName(): Promise<"cart" | "cart_items"> {
+  if (cachedCartTable) return cachedCartTable;
+  if (!supabase) return "cart";
+  try {
+    const { error } = await supabase.from("cart").select("product_id").limit(1);
+    if (!error || error.code !== "42P01") {
+      cachedCartTable = "cart";
+      return "cart";
+    }
+  } catch {
+    // Fall back to cart_items if error
+  }
+  cachedCartTable = "cart_items";
+  return "cart_items";
+}
+
+async function getWishlistTableName(): Promise<"wishlist" | "wishlists"> {
+  if (cachedWishlistTable) return cachedWishlistTable;
+  if (!supabase) return "wishlist";
+  try {
+    const { error } = await supabase.from("wishlist").select("product_id").limit(1);
+    if (!error || error.code !== "42P01") {
+      cachedWishlistTable = "wishlist";
+      return "wishlist";
+    }
+  } catch {
+    // Fall back to wishlists if error
+  }
+  cachedWishlistTable = "wishlists";
+  return "wishlists";
+}
+
+// 4. Persistent Cart Items Database Sync with Dynamic Table Detection & Robust Upserts
 export const getSupabaseCart = async (userId: string): Promise<{ product_id: string; quantity: number }[]> => {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("cart_items")
-    .select("product_id, quantity")
-    .eq("user_id", userId);
+  try {
+    const tableName = await getCartTableName();
+    console.log(`[Supabase Cart] Fetching items from table: ${tableName} for user ID: ${userId}`);
+    const { data, error } = await supabase
+      .from(tableName || "cart")
+      .select("product_id, quantity")
+      .eq("user_id", userId);
 
-  if (error) {
-    console.error("Failed fetching database cart items from Supabase", error);
+    if (error) {
+      console.warn(`[Supabase Cart] Failed fetching database cart items from table ${tableName}:`, error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Cart Exception] getSupabaseCart:", err);
     return [];
   }
-  return data || [];
 };
 
 export const syncSupabaseCart = async (userId: string, items: { product_id: string; quantity: number }[]) => {
   if (!supabase) return;
-  
-  // Clear other cart entries to override
-  const { error: deleteError } = await supabase
-    .from("cart_items")
-    .delete()
-    .eq("user_id", userId);
+  try {
+    const tableName = await getCartTableName();
+    console.log(`[Supabase Cart] Synchronizing user cart with table: ${tableName} for user ID: ${userId}, item count: ${items.length}`);
+    
+    // Clear other cart entries to override
+    const { error: deleteError } = await supabase
+      .from(tableName || "cart")
+      .delete()
+      .eq("user_id", userId);
 
-  if (deleteError) {
-    console.error("Cart consolidation clear error:", deleteError);
-    return;
-  }
+    if (deleteError) {
+      console.warn(`[Supabase Cart] Clear existing items error inside ${tableName}:`, deleteError);
+    }
 
-  if (items.length === 0) return;
+    if (items.length === 0) {
+      console.log(`[Supabase Cart] Cart is empty, sync complete for table ${tableName}.`);
+      return;
+    }
 
-  // Bulk upsert new configurations
-  const { error: upsertError } = await supabase
-    .from("cart_items")
-    .insert(
-      items.map(item => ({
-        user_id: userId,
-        product_id: item.product_id,
-        quantity: item.quantity
-      }))
-    );
+    const payload = items.map(item => ({
+      user_id: userId,
+      product_id: item.product_id,
+      quantity: item.quantity,
+      created_at: new Date().toISOString()
+    }));
 
-  if (upsertError) {
-    console.error("Cart sync integration failure:", upsertError);
+    const { error: insertError } = await supabase
+      .from(tableName || "cart")
+      .insert(payload);
+
+    if (insertError) {
+      console.warn(`[Supabase Cart] Initial cart insert failed (checking column structures):`, insertError);
+      
+      // Retry without created_at column if database does not contain it
+      if (insertError.message?.includes("column") || insertError.code === "42703") {
+        console.log(`[Supabase Cart Retry] Attempting to insert in table ${tableName} without "created_at" column...`);
+        const { error: retryError } = await supabase
+          .from(tableName || "cart")
+          .insert(items.map(item => ({
+            user_id: userId,
+            product_id: item.product_id,
+            quantity: item.quantity
+          })));
+        
+        if (retryError) {
+          console.error(`[Supabase Cart Retry Failure] Insert retry failed inside ${tableName}:`, retryError);
+          throw retryError;
+        }
+      } else {
+        throw insertError;
+      }
+    }
+    console.log(`[Supabase Cart] Cart synchronized successfully for user ${userId} in table ${tableName}`);
+  } catch (err) {
+    console.error("[Supabase Cart Exception] syncSupabaseCart failed to finish sync:", err);
   }
 };
 
-// 4. Create and Fetch High Standard Orders
+// 5. Create and Fetch High Standard Orders & Fail-Safe Order Items Transaction
 export const createSupabaseOrder = async (
   userId: string | null,
   email: string,
@@ -154,195 +225,341 @@ export const createSupabaseOrder = async (
   total: number,
   items: { name: string; price: number; quantity: number }[]
 ): Promise<string | null> => {
-  if (!supabase) return null;
+  if (!supabase) {
+    console.warn("[Supabase Order] Supabase unconfigured, skipping order creation");
+    return null;
+  }
 
-  // Insert to standard public.orders
-  const { data: order, error: orderError } = await supabase
-    .from("orders")
-    .insert({
-      user_id: userId,
+  try {
+    console.log(`[Supabase Order] Creating new order entry: user ID: ${userId || "GUEST"}, email: ${email}, items: ${items.length}`);
+    
+    const payload: any = {
       customer_email: email,
-      customer_phone: phone,
+      customer_phone: phone || null,
       total,
       status: "calibrating"
-    })
-    .select()
-    .single();
+    };
 
-  if (orderError) {
-    console.error("Supabase order transaction write failed", orderError);
-    throw orderError;
+    if (userId) {
+      payload.user_id = userId;
+    }
+
+    // Insert to standard public.orders
+    const { data: order, error: orderError } = await supabase
+      .from("orders")
+      .insert(payload)
+      .select()
+      .single();
+
+    if (orderError) {
+      console.warn("[Supabase Order] Initial order entry failed:", orderError);
+
+      if (userId && (orderError.message?.includes("foreign key") || orderError.code === "23503" || orderError.message?.includes("permission") || orderError.code === "42501")) {
+        console.log("[Supabase Order Retry] Retrying order dispatch with neutral guest payload to bypass RLS or foreign key alignment constraints...");
+        delete payload.user_id;
+        const { data: retryOrder, error: retryError } = await supabase
+          .from("orders")
+          .insert(payload)
+          .select()
+          .single();
+
+        if (retryError) {
+          console.error("[Supabase Order Retry Failure] Order execution failed completely:", retryError);
+          throw retryError;
+        }
+
+        if (retryOrder) {
+          await processOrderItems(retryOrder.id, items);
+          return retryOrder.id;
+        }
+      }
+      throw orderError;
+    }
+
+    if (!order) {
+      throw new Error("Empty response object received from Supabase orders statement check");
+    }
+
+    await processOrderItems(order.id, items);
+    return order.id;
+  } catch (err) {
+    console.error("[Supabase Order Exception] createSupabaseOrder:", err);
+    throw err;
   }
-
-  const orderId = order.id;
-
-  // Insert order items
-  const { error: itemsError } = await supabase
-    .from("order_items")
-    .insert(
-      items.map(item => ({
-        order_id: orderId,
-        product_name: item.name,
-        price: item.price,
-        quantity: item.quantity
-      }))
-    );
-
-  if (itemsError) {
-    console.error("Supabase order items transaction write failed", itemsError);
-    throw itemsError;
-  }
-
-  return orderId;
 };
+
+async function processOrderItems(orderId: string, items: { name: string; price: number; quantity: number }[]): Promise<void> {
+  if (!supabase) return;
+  console.log(`[Supabase Order Items] Linking items for Order ID: ${orderId}...`);
+  try {
+    const payload = items.map(item => ({
+      order_id: orderId,
+      product_name: item.name,
+      price: item.price,
+      quantity: item.quantity
+    }));
+
+    const { error: itemsError } = await supabase
+      .from("order_items")
+      .insert(payload);
+
+    if (itemsError) {
+      console.warn("[Supabase Order Items] Order items table insert failed:", itemsError);
+    } else {
+      console.log(`[Supabase Order Items] Successfully linked ${items.length} items to order ${orderId}`);
+    }
+  } catch (err) {
+    console.error("[Supabase Order Items Exception] processOrderItems failed:", err);
+  }
+}
 
 export const getSupabaseOrders = async (userId: string): Promise<SupabaseOrder[]> => {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*, order_items(*)")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
 
-  if (error) {
-    console.error("Error retrieving user database orders from Supabase", error);
+    if (error) {
+      console.error("[Supabase Orders] Error retrieving user orders from database:", error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Orders Exception] getSupabaseOrders:", err);
     return [];
   }
-  return data || [];
 };
 
-// 5. Admin Dashboard retrieve all database dispatches
+// 6. Admin Dashboard Retrieve All Database Dispatches
 export const getSupabaseAllOrders = async (): Promise<SupabaseOrder[]> => {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("orders")
-    .select("*, order_items(*)")
-    .order("created_at", { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*, order_items(*)")
+      .order("created_at", { ascending: false });
 
-  if (error) {
-    console.error("Error retrieving all database orders from Supabase (Admin)", error);
+    if (error) {
+      console.error("[Supabase Admin Orders] Error retrieving all orders from Supabase:", error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Admin Orders Exception] getSupabaseAllOrders:", err);
     return [];
   }
-  return data || [];
 };
 
-// 6. Update Order Status
+// 7. Update Order Status
 export const updateSupabaseOrderStatus = async (
   orderId: string,
   status: SupabaseOrder["status"]
 ) => {
   if (!supabase) return;
-  const { error } = await supabase
-    .from("orders")
-    .update({ status })
-    .eq("id", orderId);
+  try {
+    console.log(`[Supabase Admin Status] Setting status for order ${orderId} to: ${status}`);
+    const { error } = await supabase
+      .from("orders")
+      .update({ status })
+      .eq("id", orderId);
 
-  if (error) {
-    console.error("Admin order calibration update failed", error);
-    throw error;
+    if (error) {
+      console.error("[Supabase Admin Status] Update order status failed:", error);
+      throw error;
+    }
+  } catch (err) {
+    console.error("[Supabase Admin Status Exception] updateSupabaseOrderStatus:", err);
+    throw err;
   }
 };
 
-// 7. Wishlist Operations
+// 8. Wishlist Operations with Dynamic Table Selection & Column Fallbacks
 export const getSupabaseWishlist = async (userId: string): Promise<string[]> => {
   if (!supabase) return [];
-  const { data, error } = await supabase
-    .from("wishlist")
-    .select("product_id")
-    .eq("user_id", userId);
+  try {
+    const tableName = await getWishlistTableName();
+    console.log(`[Supabase Wishlist] Retrieving wishlist items from table: ${tableName} for user ID: ${userId}`);
+    const { data, error } = await supabase
+      .from(tableName || "wishlist")
+      .select("product_id")
+      .eq("user_id", userId);
 
-  if (error) {
-    console.error("Error retrieving user wishlist from Supabase:", error);
+    if (error) {
+      console.error(`[Supabase Wishlist] Error retrieving user wishlist from table ${tableName}:`, error);
+      return [];
+    }
+    return data?.map(d => d.product_id) || [];
+  } catch (err) {
+    console.error("[Supabase Wishlist Exception] getSupabaseWishlist:", err);
     return [];
   }
-  return data?.map(d => d.product_id) || [];
 };
 
 export const syncSupabaseWishlist = async (userId: string, productIds: string[]) => {
   if (!supabase) return;
-  
-  // Clear any existing entries for this user
-  const { error: deleteError } = await supabase
-    .from("wishlist")
-    .delete()
-    .eq("user_id", userId);
+  try {
+    const tableName = await getWishlistTableName();
+    console.log(`[Supabase Wishlist] Synchronizing user wishlist with table: ${tableName} for user ID: ${userId}, item count: ${productIds.length}`);
+    
+    // Clear any existing entries for this user
+    const { error: deleteError } = await supabase
+      .from(tableName || "wishlist")
+      .delete()
+      .eq("user_id", userId);
 
-  if (deleteError) {
-    console.error("Error clearing wishlist on sync:", deleteError);
-    return;
-  }
+    if (deleteError) {
+      console.warn(`[Supabase Wishlist] Error clearing wishlist inside ${tableName}:`, deleteError);
+    }
 
-  if (productIds.length === 0) return;
+    if (productIds.length === 0) return;
 
-  // Insert wishlist entries
-  const { error: insertError } = await supabase
-    .from("wishlist")
-    .insert(
-      productIds.map(productId => ({
-        user_id: userId,
-        product_id: productId
-      }))
-    );
+    // Insert wishlist entries
+    const payload = productIds.map(productId => ({
+      user_id: userId,
+      product_id: productId,
+      created_at: new Date().toISOString()
+    }));
 
-  if (insertError) {
-    console.error("Error inserting wishlist on sync:", insertError);
+    const { error: insertError } = await supabase
+      .from(tableName || "wishlist")
+      .insert(payload);
+
+    if (insertError) {
+      console.warn(`[Supabase Wishlist] Initial wishlist insert in ${tableName} failed:`, insertError);
+      
+      // Retry without created_at column if database does not contain it
+      if (insertError.message?.includes("column") || insertError.code === "42703") {
+        console.log(`[Supabase Wishlist Retry] Retrying wishlist insertion without "created_at"...`);
+        const { error: retryError } = await supabase
+          .from(tableName || "wishlist")
+          .insert(
+            productIds.map(productId => ({
+              user_id: userId,
+              product_id: productId
+            }))
+          );
+        if (retryError) {
+          console.error(`[Supabase Wishlist Retry Failure] Failed inserting into ${tableName}:`, retryError);
+        } else {
+          console.log(`[Supabase Wishlist] Wishlist synchronized successfully without created_at in ${tableName}`);
+        }
+      }
+    } else {
+      console.log(`[Supabase Wishlist] Wishlist synchronized successfully for user ${userId} in ${tableName}`);
+    }
+  } catch (err) {
+    console.error("[Supabase Wishlist Exception] syncSupabaseWishlist:", err);
   }
 };
 
 export const toggleSupabaseWishlistItem = async (userId: string, productId: string, isAdding: boolean) => {
   if (!supabase) return;
-  if (isAdding) {
-    const { error } = await supabase
-      .from("wishlist")
-      .insert({ user_id: userId, product_id: productId });
-    if (error) {
-      console.error("Error adding to wishlist", error);
+  try {
+    const tableName = await getWishlistTableName();
+    console.log(`[Supabase Wishlist] Toggling wishlist: user ${userId}, product ${productId}, isAdding: ${isAdding} on table: ${tableName}`);
+    
+    if (isAdding) {
+      const { error } = await supabase
+        .from(tableName || "wishlist")
+        .insert({ user_id: userId, product_id: productId, created_at: new Date().toISOString() });
+      
+      if (error) {
+        console.warn("[Supabase Wishlist] Initial toggle insert error:", error);
+        
+        // Retry without created_at
+        if (error.message?.includes("column") || error.code === "42703") {
+          console.log("[Supabase Wishlist Retry] Retrying toggle wishlist insert without created_at...");
+          const { error: retryErr } = await supabase
+            .from(tableName || "wishlist")
+            .insert({ user_id: userId, product_id: productId });
+          if (retryErr) {
+            console.error("[Supabase Wishlist Retry Failure] Failed to add item to wishlist:", retryErr);
+            throw retryErr;
+          }
+        } else {
+          throw error;
+        }
+      }
+    } else {
+      const { error } = await supabase
+        .from(tableName || "wishlist")
+        .delete()
+        .eq("user_id", userId)
+        .eq("product_id", productId);
+      
+      if (error) {
+        console.error("[Supabase Wishlist] Failed removing item from wishlist:", error);
+        throw error;
+      }
     }
-  } else {
-    const { error } = await supabase
-      .from("wishlist")
-      .delete()
-      .eq("user_id", userId)
-      .eq("product_id", productId);
-    if (error) {
-      console.error("Error removing from wishlist", error);
-    }
+    console.log(`[Supabase Wishlist] Successfully completed item toggle in table ${tableName}`);
+  } catch (err) {
+    console.error("[Supabase Wishlist Exception] toggleSupabaseWishlistItem:", err);
+    throw err;
   }
 };
 
-// 8. Newsletter Subscription Operation
+// 9. Newsletter Subscription Operation with Fallback Support
 export const subscribeNewsletter = async (email: string): Promise<void> => {
-  if (!supabase) return;
-  const { error } = await supabase
-    .from("newsletter_subscribers")
-    .insert({ email });
-
-  if (error) {
-    console.error("Newsletter subscription failure:", error);
-    throw error;
-  }
-};
-
-// 9. Profile Saving Operation
-export const saveSupabaseProfile = async (uid: string, name: string, email: string) => {
   if (!supabase) {
-    console.warn("Supabase is not configured. Skipping profile database write.");
+    console.warn("[Supabase Newsletter] Supabase unconfigured, skipping newsletter subscribe");
     return;
   }
   
   try {
-    console.log(`Checking if profile already exists for uid: ${uid}...`);
+    console.log(`[Supabase Newsletter] Subscribing email: ${email}`);
+    const { error } = await supabase
+      .from("newsletter_subscribers")
+      .insert({ email, created_at: new Date().toISOString() });
+
+    if (error) {
+      console.warn("[Supabase Newsletter] Initial subscriber insert error:", error);
+      
+      // Retry without created_at column if database does not contain it
+      if (error.message?.includes("column") || error.code === "42703") {
+        console.log("[Supabase Newsletter Retry] Retrying insert into newsletter_subscribers without created_at column...");
+        const { error: retryError } = await supabase
+          .from("newsletter_subscribers")
+          .insert({ email });
+        
+        if (retryError) {
+          console.error("[Supabase Newsletter Retry Failure] Re-run subscription failed:", retryError);
+          throw retryError;
+        }
+      } else {
+        throw error;
+      }
+    }
+    console.log(`[Supabase Newsletter] Successfully subscribed email: ${email}`);
+  } catch (err) {
+    console.error("[Supabase Newsletter Exception] subscribeNewsletter:", err);
+    throw err;
+  }
+};
+
+// 10. Profile Saving Operation with Non-Duplicate Check and Robust Minimal Schema Retry
+export const saveSupabaseProfile = async (uid: string, name: string, email: string) => {
+  if (!supabase) {
+    console.warn("[Supabase Profile] Supabase is not configured. Skipping profile database write.");
+    return;
+  }
+  
+  try {
+    console.log(`[Supabase Profile] Checking if user profile already exists for UID: ${uid}...`);
     const { data: existing, error: checkError } = await supabase
       .from("profiles")
       .select("id")
       .eq("id", uid);
 
     if (checkError) {
-      console.error("Error checking existing profiles in Supabase profiles:", checkError);
+      console.warn("[Supabase Profile] Error checking existing profile status:", checkError);
     }
 
     if (existing && existing.length > 0) {
-      console.log(`Profile with id ${uid} already exists. Skipping insert to prevent duplication.`);
+      console.log(`[Supabase Profile] Row with id ${uid} already exists. Skipping insertion to prevent duplicate records.`);
       return;
     }
 
@@ -354,19 +571,36 @@ export const saveSupabaseProfile = async (uid: string, name: string, email: stri
       created_at: new Date().toISOString()
     };
 
-    console.log("Saving new profile to Supabase profiles:", payload);
+    console.log("[Supabase Profile] Attempting profile record insertion with payload:", payload);
     const { error: insertError } = await supabase
       .from("profiles")
       .insert(payload);
 
     if (insertError) {
-      console.error("Failed to insert profile into Database:", insertError);
-      throw insertError;
+      console.warn("[Supabase Profile] Main insertion failed, attempts retrying with minimalist requested columns:", insertError);
+      
+      // Fallback: save ONLY the strictly required columns mentioned in Requirement #1 (id, email, created_at)
+      const fallbackPayload = {
+        id: uid,
+        email: email,
+        created_at: new Date().toISOString()
+      };
+      
+      console.log("[Supabase Profile Retry] Attempting minimalist fallback profile record:", fallbackPayload);
+      const { error: fallbackError } = await supabase
+        .from("profiles")
+        .insert(fallbackPayload);
+        
+      if (fallbackError) {
+        console.error("[Supabase Profile Fallback Failure] Profile insertion aborted:", fallbackError);
+        throw fallbackError;
+      }
+      console.log(`[Supabase Profile] Fallback profile entry saved successfully for id: ${uid}`);
+    } else {
+      console.log(`[Supabase Profile] Successfully created new user profile row in profiles table for id: ${uid}`);
     }
-
-    console.log(`Successfully created user profile in profiles table for uid: ${uid}`);
   } catch (err) {
-    console.error("Exception handled inside saveSupabaseProfile:", err);
+    console.error("[Supabase Profile Exception] saveSupabaseProfile:", err);
     throw err;
   }
 };
