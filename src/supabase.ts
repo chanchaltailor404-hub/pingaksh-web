@@ -75,7 +75,7 @@ export const getSupabaseProducts = async (): Promise<SupabaseProduct[]> => {
     const { data, error } = await supabase
       .from("products")
       .select("*")
-      .order("name", { ascending: true });
+      .order("created_at", { ascending: false });
     
     if (error) {
       console.error("[Supabase Products] Failed to load products from database:", error);

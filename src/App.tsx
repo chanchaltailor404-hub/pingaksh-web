@@ -88,6 +88,8 @@ interface Watch {
   image: string;
   category: "Classic" | "Sport" | "Minimalist" | "Luxury";
   description: string;
+  image_url?: string;
+  created_at?: string;
 }
 
 interface CartItem extends Watch {
@@ -613,7 +615,8 @@ const Home = ({
   wishlist,
   onToggleWishlist,
   cart = [],
-  onUpdateQty
+  onUpdateQty,
+  isProductsLoading = false
 }: { 
   onAddToCart: (w: Watch) => void; 
   watches: Watch[];
@@ -622,8 +625,17 @@ const Home = ({
   onToggleWishlist: (id: string) => void;
   cart?: CartItem[];
   onUpdateQty?: (id: string, delta: number) => void;
+  isProductsLoading?: boolean;
 }) => {
-  const featuredList = watches.length >= 4 ? watches.slice(0, 4) : WATCHES.slice(0, 4);
+  // Sort dynamic products: newest first (using created_at timestamp falling back to id descending)
+  const sortedWatches = [...watches].sort((a, b) => {
+    const timeA = a.created_at ? new Date(a.created_at).getTime() : 0;
+    const timeB = b.created_at ? new Date(b.created_at).getTime() : 0;
+    if (timeA === timeB) {
+      return b.id.localeCompare(a.id);
+    }
+    return timeB - timeA;
+  });
 
   return (
     <main>
@@ -750,26 +762,59 @@ const Home = ({
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 md:gap-10">
-            {featuredList.map((watch) => {
-              const isLiked = wishlist.includes(watch.id);
-              return (
-                <motion.div 
-                  key={watch.id}
-                  layout
-                  initial={{ opacity: 0, y: 30 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ duration: 0.6 }}
-                  className="group bg-neutral-950/40 border border-neutral-905 hover:border-gold/30 hover:bg-neutral-950 hover:shadow-[0_12px_45px_rgba(212,175,55,0.06)] hover:-translate-y-1.5 transition-all duration-500 rounded-2xl overflow-hidden flex flex-col h-full relative"
+            {isProductsLoading ? (
+              // Luxury dark shimmer placeholder skeleton loaders
+              Array.from({ length: 4 }).map((_, idx) => (
+                <div 
+                  key={idx} 
+                  className="bg-neutral-950/40 border border-neutral-900 rounded-2xl overflow-hidden flex flex-col h-[480px] animate-pulse relative"
                 >
-                  {/* Image Container with Consistent Dimensions */}
-                  <div className="relative w-full h-80 overflow-hidden bg-neutral-950 flex-shrink-0 border-b border-neutral-900/60">
-                    <img 
-                      src={watch.image} 
-                      alt={watch.name} 
-                      className="w-full h-full object-cover transition-transform duration-[800ms] group-hover:scale-[1.04] ease-out select-none"
-                      referrerPolicy="no-referrer"
-                    />
+                  <div className="w-full h-80 bg-neutral-900/45 relative" />
+                  <div className="p-5 flex-grow flex flex-col justify-between space-y-4">
+                    <div className="space-y-3">
+                      <div className="h-5 bg-neutral-900/60 rounded w-2/3" />
+                      <div className="h-4 bg-neutral-900/60 rounded w-1/3" />
+                      <div className="space-y-2">
+                        <div className="h-3 bg-neutral-900/40 rounded w-full" />
+                        <div className="h-3 bg-neutral-900/40 rounded w-5/6" />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 pt-4 border-t border-neutral-900/60">
+                      <div className="h-10 bg-neutral-900/50 rounded-sm" />
+                      <div className="h-10 bg-neutral-900/50 rounded-sm" />
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : sortedWatches.length === 0 ? (
+              <div className="col-span-full text-center py-20 bg-neutral-950/20 border border-neutral-900 rounded-2xl space-y-4">
+                <span className="text-gold text-xs font-mono font-bold tracking-[0.3em] uppercase block">NO MASTERPIECES FOUND</span>
+                <p className="text-neutral-400 text-xs font-light max-w-md mx-auto">Our digital vault is temporarily closed or empty. Add some original pieces inside settings to start exploring.</p>
+              </div>
+            ) :
+              sortedWatches.map((watch) => {
+                const isLiked = wishlist.includes(watch.id);
+                return (
+                  <motion.div 
+                    key={watch.id}
+                    layout
+                    initial={{ opacity: 0, y: 30 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.6 }}
+                    className="group bg-neutral-950/40 border border-neutral-905 hover:border-gold/30 hover:bg-neutral-950 hover:shadow-[0_12px_45px_rgba(212,175,55,0.06)] hover:-translate-y-1.5 transition-all duration-500 rounded-2xl overflow-hidden flex flex-col h-full relative"
+                  >
+                    {/* Image Container with Consistent Dimensions */}
+                    <div className="relative w-full h-80 overflow-hidden bg-neutral-950 flex-shrink-0 border-b border-neutral-900/60">
+                      <img 
+                        src={watch.image || watch.image_url || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800"} 
+                        alt={watch.name} 
+                        onError={(e) => {
+                          e.currentTarget.src = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                        }}
+                        className="w-full h-full object-cover transition-transform duration-[800ms] group-hover:scale-[1.04] ease-out select-none"
+                        referrerPolicy="no-referrer"
+                      />
                     <div className="absolute inset-0 bg-gradient-to-t from-neutral-950/80 via-transparent to-transparent opacity-60" />
                     
                     {/* Category Pill */}
@@ -3652,6 +3697,7 @@ const ProfilePage = ({
 
 export default function App() {
   const [watches, setWatches] = useState<Watch[]>([]);
+  const [isProductsLoading, setIsProductsLoading] = useState(true);
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
       const saved = localStorage.getItem("pingaksh_cart");
@@ -3880,7 +3926,10 @@ export default function App() {
       };
 
       // Load products initially & subscribe to changes in real-time via PostgreSQL replication
-      const loadSupabaseProducts = async () => {
+      const loadSupabaseProducts = async (isBackground = false) => {
+        if (!isBackground) {
+          setIsProductsLoading(true);
+        }
         try {
           const dbProducts = await getSupabaseProducts();
           if (dbProducts && dbProducts.length > 0) {
@@ -3915,6 +3964,8 @@ export default function App() {
         } catch (err) {
           console.error("Supabase products load failed. Falling back to local catalog:", err);
           setWatches(WATCHES); // Local static catalog fallback
+        } finally {
+          setIsProductsLoading(false);
         }
       };
       loadSupabaseProducts();
@@ -3926,7 +3977,7 @@ export default function App() {
           "postgres_changes",
           { event: "*", schema: "public", table: "products" },
           () => {
-            loadSupabaseProducts();
+            loadSupabaseProducts(true);
           }
         )
         .subscribe();
@@ -3938,6 +3989,7 @@ export default function App() {
       // Local development fallback
       setWatches(WATCHES);
       setIsAuthReady(true);
+      setIsProductsLoading(false);
       
       const localUser = localStorage.getItem("pingaksh_mock_user");
       if (localUser) {
@@ -4086,7 +4138,7 @@ export default function App() {
         />
 
         <Routes>
-          <Route path="/" element={<Home onAddToCart={addToCart} watches={watches} onViewDetails={setSelectedWatch} wishlist={wishlist} onToggleWishlist={toggleWishlist} cart={cart} onUpdateQty={updateQty} />} />
+          <Route path="/" element={<Home onAddToCart={addToCart} watches={watches} onViewDetails={setSelectedWatch} wishlist={wishlist} onToggleWishlist={toggleWishlist} cart={cart} onUpdateQty={updateQty} isProductsLoading={isProductsLoading} />} />
           <Route path="/shop" element={<Shop onAddToCart={addToCart} watches={watches} onViewDetails={setSelectedWatch} wishlist={wishlist} onToggleWishlist={toggleWishlist} cart={cart} onUpdateQty={updateQty} />} />
           <Route path="/product/:id" element={<ProductPage onAddToCart={addToCart} watches={watches} wishlist={wishlist} onToggleWishlist={toggleWishlist} cart={cart} onUpdateQty={updateQty} />} />
           <Route 
