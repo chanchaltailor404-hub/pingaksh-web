@@ -61,7 +61,8 @@ import {
   syncSupabaseWishlist,
   toggleSupabaseWishlistItem,
   subscribeNewsletter,
-  saveSupabaseProfile
+  saveSupabaseProfile,
+  getSupabaseProductById
 } from "./supabase";
 import WatchAssistant from "./components/WatchAssistant";
 
@@ -2203,55 +2204,201 @@ const ProductPage = ({
 }: ProductPageProps) => {
   const { id } = useParams<{ id: string }>();
 
-  // Reset scroll to top when page changes
-  useEffect(() => {
-    window.scrollTo(0, 0);
-  }, [id]);
-
-  const watch = watches.find(w => w.id === id) || WATCHES.find(w => w.id === id);
-
+  const [product, setProduct] = useState<Watch | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
   const [activeIdx, setActiveIdx] = useState(0);
   const [zoomStyle, setZoomStyle] = useState({});
-  const [localReviews, setLocalReviews] = useState<any[]>(() => {
-    try {
-      const saved = watch ? localStorage.getItem(`pingaksh_reviews_${watch.id}`) : null;
-      return saved ? JSON.parse(saved) : [
-        {
-          id: "r1",
-          name: "Siddharth Sharma",
-          rating: 5,
-          date: "May 18, 2026",
-          verified: true,
-          comment: "Truly stellar craft. Every link on the strap fits flawlessly, and the accuracy is immaculate. Exceeded all my expectations. The movement is robustly heavy and silent."
-        },
-        {
-          id: "r2",
-          name: "Priya Patel",
-          rating: 5,
-          date: "May 12, 2026",
-          verified: true,
-          comment: "The glass sapphire finish is of outstanding quality. I have received countless compliments already inside my corporate firm. An absolute showstopper of a dial!"
-        },
-        {
-          id: "r3",
-          name: "Amit Deshmukh",
-          rating: 4,
-          date: "April 29, 2026",
-          verified: true,
-          comment: "Very sleek and heavy-built weight. Feels premium on hand operations. Shipping charges applied since it was India speed-delivery, but totally worth the insurance."
-        }
-      ];
-    } catch {
-      return [];
-    }
-  });
+  const [localReviews, setLocalReviews] = useState<any[]>([]);
 
   const [revName, setRevName] = useState("");
   const [revRating, setRevRating] = useState(5);
   const [revComment, setRevComment] = useState("");
   const [revSuccess, setRevSuccess] = useState(false);
 
-  if (!watch) {
+  // States for Pre-Cart Quantity
+  const [quantity, setQuantity] = useState(1);
+
+  // Reset scroll to top when page changes
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [id]);
+
+  // Dynamic products loader
+  useEffect(() => {
+    let active = true;
+    const fetchProduct = async () => {
+      if (!id) return;
+      setIsLoading(true);
+      try {
+        const dbProd = await getSupabaseProductById(id);
+        if (!active) return;
+        if (dbProd) {
+          const loadedProduct: Watch = {
+            id: dbProd.id,
+            name: dbProd.name,
+            price: dbProd.price,
+            image: dbProd.image,
+            category: dbProd.category,
+            description: dbProd.description,
+            created_at: dbProd.created_at
+          };
+          setProduct(loadedProduct);
+        } else {
+          // Fallback to parents
+          const matched = watches.find(w => w.id === id) || WATCHES.find(w => w.id === id);
+          setProduct(matched || null);
+        }
+      } catch (err) {
+        console.error("Failed inside product details lookup:", err);
+        const matched = watches.find(w => w.id === id) || WATCHES.find(w => w.id === id);
+        setProduct(matched || null);
+      } finally {
+        if (active) {
+          setIsLoading(false);
+          setActiveIdx(0); // Reset gallery active page
+        }
+      }
+    };
+    fetchProduct();
+    return () => {
+      active = false;
+    };
+  }, [id, watches]);
+
+  const existingCartItem = product ? cart.find(item => item.id === product.id) : null;
+
+  // Sync state quantity to current cart if loaded
+  useEffect(() => {
+    if (existingCartItem) {
+      setQuantity(existingCartItem.quantity);
+    } else {
+      setQuantity(1);
+    }
+  }, [existingCartItem?.quantity, product?.id]);
+
+  // Load reviews client-side
+  useEffect(() => {
+    if (!product) return;
+    try {
+      const saved = localStorage.getItem(`pingaksh_reviews_${product.id}`);
+      if (saved) {
+        setLocalReviews(JSON.parse(saved));
+      } else {
+        setLocalReviews([
+          {
+            id: "r1",
+            name: "Siddharth Sharma",
+            rating: 5,
+            date: "May 18, 2026",
+            verified: true,
+            comment: "Truly stellar craft. Every link on the strap fits flawlessly, and the accuracy is immaculate. Exceeded all my expectations. The movement is robustly heavy and silent."
+          },
+          {
+            id: "r2",
+            name: "Priya Patel",
+            rating: 5,
+            date: "May 12, 2026",
+            verified: true,
+            comment: "The glass sapphire finish is of outstanding quality. I have received countless compliments already inside my corporate firm. An absolute showstopper of a dial!"
+          },
+          {
+            id: "r3",
+            name: "Amit Deshmukh",
+            rating: 4,
+            date: "April 29, 2026",
+            verified: true,
+            comment: "Very sleek and heavy-built weight. Feels premium on hand operations. Shipping charges applied since it was India speed-delivery, but totally worth the insurance."
+          }
+        ]);
+      }
+    } catch {
+      setLocalReviews([]);
+    }
+  }, [product?.id]);
+
+  const handleAddReview = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!product || !revName.trim() || !revComment.trim()) return;
+
+    const newRev = {
+      id: "r_user_" + Date.now(),
+      name: revName,
+      rating: revRating,
+      date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+      verified: true,
+      comment: revComment
+    };
+
+    const updated = [newRev, ...localReviews];
+    setLocalReviews(updated);
+    try {
+      localStorage.setItem(`pingaksh_reviews_${product.id}`, JSON.stringify(updated));
+    } catch (err) {
+      console.error("Local storage sync error", err);
+    }
+
+    setRevName("");
+    setRevRating(5);
+    setRevComment("");
+    setRevSuccess(true);
+    setTimeout(() => setRevSuccess(false), 4000);
+  };
+
+  const avgRating = localReviews.length > 0 
+    ? (localReviews.reduce((sum, r) => sum + r.rating, 0) / localReviews.length).toFixed(1)
+    : "5.0";
+
+  if (isLoading) {
+    return (
+      <div className="pt-32 pb-24 text-neutral-100 max-w-7xl mx-auto px-4 md:px-8 space-y-16 animate-pulse">
+        {/* Breadcrumb skeleton */}
+        <div className="h-4 bg-neutral-900 rounded w-40" />
+
+        {/* Core Layout Skeleton */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-start">
+          {/* Gallery Skeleton */}
+          <div className="lg:col-span-7 flex flex-col md:flex-row-reverse gap-4">
+            <div className="w-full aspect-[4/5] bg-neutral-900 rounded-2xl" />
+            <div className="flex md:flex-col gap-3 min-w-[80px]">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div key={i} className="w-20 aspect-[4/5] bg-neutral-900 rounded-lg animate-pulse" />
+              ))}
+            </div>
+          </div>
+
+          {/* Details Skeleton */}
+          <div className="lg:col-span-5 space-y-8">
+            <div className="space-y-4">
+              <div className="h-4 bg-neutral-900 rounded w-32" />
+              <div className="h-10 bg-neutral-900 rounded w-3/4" />
+              <div className="h-6 bg-neutral-900 rounded w-1/4" />
+              <div className="w-16 h-0.5 bg-neutral-900" />
+              <div className="space-y-2">
+                <div className="h-4 bg-neutral-900 rounded w-full" />
+                <div className="h-4 bg-neutral-900 rounded w-5/6" />
+                <div className="h-4 bg-neutral-900 rounded w-2/3" />
+              </div>
+            </div>
+
+            <div className="space-y-4 pt-6 border-t border-neutral-900">
+              <div className="h-4 bg-neutral-900 rounded w-1/2" />
+              <div className="space-y-2">
+                <div className="h-3 bg-neutral-900 rounded w-full" />
+                <div className="h-3 bg-neutral-900 rounded w-full" />
+              </div>
+            </div>
+
+            <div className="pt-6 border-t border-neutral-900 flex gap-4">
+              <div className="h-12 bg-neutral-900 rounded flex-1" />
+              <div className="h-12 bg-neutral-900 rounded w-32" />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!product) {
     return (
       <div className="pt-40 pb-32 text-center max-w-md mx-auto px-6 space-y-6">
         <h1 className="text-3xl font-serif font-bold text-white tracking-tight">Timepiece Not Found</h1>
@@ -2263,9 +2410,10 @@ const ProductPage = ({
     );
   }
 
-  const galleryImages = getProductGallery(watch);
-  const specs = getSpecifications(watch);
-  const isLiked = wishlist.includes(watch.id);
+  const galleryImages = getProductGallery(product);
+  const specs = getSpecifications(product);
+  const isLiked = wishlist.includes(product.id);
+  const stockInfo = getStockStatus(product.id);
 
   // States for Image Zoom
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -2285,39 +2433,15 @@ const ProductPage = ({
     });
   };
 
-  const handleAddReview = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!revName.trim() || !revComment.trim()) return;
-
-    const newRev = {
-      id: "r_user_" + Date.now(),
-      name: revName,
-      rating: revRating,
-      date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-      verified: true,
-      comment: revComment
-    };
-
-    const updated = [newRev, ...localReviews];
-    setLocalReviews(updated);
-    try {
-      localStorage.setItem(`pingaksh_reviews_${watch.id}`, JSON.stringify(updated));
-    } catch (err) {
-      console.error("Local storage sync error", err);
-    }
-
-    setRevName("");
-    setRevRating(5);
-    setRevComment("");
-    setRevSuccess(true);
-    setTimeout(() => setRevSuccess(false), 4000);
-  };
-
-  const avgRating = (localReviews.reduce((sum, r) => sum + r.rating, 0) / localReviews.length).toFixed(1);
-
   // Similar products section: filter matches categories, remove current watch
   const similarProducts = (watches.length > 0 ? watches : WATCHES)
-    .filter(w => w.id !== watch.id)
+    .filter(w => w.id !== product.id)
+    .sort((a, b) => {
+      // Prioritize same category match
+      const aMatch = a.category === product.category ? 1 : 0;
+      const bMatch = b.category === product.category ? 1 : 0;
+      return bMatch - aMatch;
+    })
     .slice(0, 4);
 
   // Determine dynamic shipping rate display according to watch price class
@@ -2345,7 +2469,7 @@ const ProductPage = ({
 
       {/* Main product presentation layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-start">
-        {/* Left Side: Product Images Gallery (6cols) */}
+        {/* Left Side: Product Images Gallery (6cols in grid layout) */}
         <div className="lg:col-span-7 flex flex-col md:flex-row-reverse gap-4">
           {/* Main Showcase Panel with zoom on hover */}
           <div className="w-full flex-1 aspect-[4/5] bg-neutral-950 border border-neutral-900 rounded-2xl overflow-hidden relative group/zoom cursor-zoom-in">
@@ -2355,8 +2479,11 @@ const ProductPage = ({
               className="w-full h-full relative overflow-hidden flex items-center justify-center p-2"
             >
               <img 
-                src={galleryImages[activeIdx]} 
-                alt={`${watch.name} detail`} 
+                src={galleryImages[activeIdx] || product.image} 
+                alt={`${product.name} detail`} 
+                onError={(e) => {
+                  e.currentTarget.src = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                }}
                 style={zoomStyle}
                 className="w-full h-full object-cover transition-transform duration-100 ease-out"
                 referrerPolicy="no-referrer"
@@ -2386,6 +2513,9 @@ const ProductPage = ({
                 <img 
                   src={img} 
                   alt="thumbnail tool" 
+                  onError={(e) => {
+                    e.currentTarget.src = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                  }}
                   className="w-full h-full object-cover" 
                   referrerPolicy="no-referrer"
                 />
@@ -2394,14 +2524,22 @@ const ProductPage = ({
           </div>
         </div>
 
-        {/* Right Side: Product Details & Specs Info (5cols) */}
+        {/* Right Side: Product Details & Specs Info (5cols in layout) */}
         <div className="lg:col-span-5 space-y-8">
           <div className="space-y-4">
             <span className="text-gold text-[10px] font-mono tracking-[0.3em] font-bold block uppercase pb-1">PINGAKSH HOMAGE STUDIO</span>
             <div className="space-y-2">
-              <h1 className="text-3xl md:text-4xl font-serif font-bold text-white tracking-tight leading-none">{watch.name}</h1>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-neutral-400 text-[10px] font-mono tracking-widest uppercase border border-neutral-900 px-2 py-0.5 rounded bg-neutral-950/40">
+                  {product.category}
+                </span>
+                <span className={cn("text-[8.5px] font-mono font-bold px-2 py-0.5 rounded border uppercase tracking-widest", stockInfo.color)}>
+                  {stockInfo.label}
+                </span>
+              </div>
+              <h1 className="text-3xl md:text-4xl font-serif font-bold text-white tracking-tight leading-none pt-1">{product.name}</h1>
               <div className="flex items-center gap-3">
-                <span className="text-xl font-bold text-gold font-sans">{getFormattedPrice(watch.price)}</span>
+                <span className="text-xl font-bold text-gold font-sans">{getFormattedPrice(product.price)}</span>
                 <span className="text-neutral-600 font-sans text-xs flex mt-1">|</span>
                 <div className="flex items-center gap-1.5 mt-1">
                   <div className="flex gap-0.5 text-gold">
@@ -2413,7 +2551,7 @@ const ProductPage = ({
                       />
                     ))}
                   </div>
-                  <span className="text-[11px] font-mono text-neutral-400">({localReviews.length} authenticated reviews)</span>
+                  <span className="text-[11px] font-mono text-neutral-400">({localReviews.length} verified thoughts)</span>
                 </div>
               </div>
             </div>
@@ -2421,7 +2559,7 @@ const ProductPage = ({
             <div className="w-16 h-[2px] bg-gold" />
 
             <p className="text-neutral-300 text-sm leading-relaxed font-light">
-              {watch.description || "Individually hand-assembled and meticulously calibrated. This masterpiece pairs aesthetic luxury with robust mechanics, designed specifically for those with ambitious taste."}
+              {product.description || "Individually hand-assembled and meticulously calibrated. This masterpiece pairs aesthetic luxury with robust mechanics, designed specifically for those with ambitious taste."}
             </p>
           </div>
 
@@ -2438,42 +2576,72 @@ const ProductPage = ({
             </div>
           </div>
 
-          {/* Interaction Row (Add to Cart, Wishlist) */}
-          <div className="pt-6 border-t border-neutral-900/45 flex flex-col sm:flex-row gap-4">
-            {cart && cart.find(item => item.id === watch.id) && onUpdateQty ? (
+          {/* Interaction Row (Add to Cart, Wishlist, Quantity selector) */}
+          <div className="pt-6 border-t border-neutral-900/45 flex flex-col md:flex-row gap-4 items-stretch">
+            {existingCartItem && onUpdateQty ? (
               <div className="flex-1 flex items-center justify-between border border-gold/40 bg-gold/5 rounded-sm overflow-hidden text-white font-mono p-1">
                 <button 
-                  onClick={() => onUpdateQty(watch.id, -1)}
-                  className="px-6 py-3 hover:bg-gold hover:text-black transition-colors text-gold text-sm font-bold active:scale-95"
+                  onClick={() => {
+                    if (onUpdateQty) onUpdateQty(product.id, -1);
+                  }}
+                  className="px-5 py-3.5 hover:bg-gold hover:text-black transition-colors text-gold text-sm font-bold active:scale-95 cursor-pointer"
                 >
                   -
                 </button>
                 <div className="flex flex-col items-center select-none text-center">
                   <span className="text-[10px] font-bold tracking-widest text-gold font-mono uppercase">
-                    {cart.find(item => item.id === watch.id)?.quantity} of {watch.name} in bag
+                    {existingCartItem.quantity} in bag
                   </span>
                   <span className="text-[9px] text-neutral-400 font-mono tracking-wider">
-                    {getFormattedPrice(watch.price * (cart.find(item => item.id === watch.id)?.quantity || 1))}
+                    {getFormattedPrice(product.price * existingCartItem.quantity)}
                   </span>
                 </div>
                 <button 
-                  onClick={() => onUpdateQty(watch.id, 1)}
-                  className="px-6 py-3 hover:bg-gold hover:text-black transition-colors text-gold text-sm font-bold active:scale-95"
+                  onClick={() => {
+                    if (onUpdateQty) onUpdateQty(product.id, 1);
+                  }}
+                  className="px-5 py-3.5 hover:bg-gold hover:text-black transition-colors text-gold text-sm font-bold active:scale-95 cursor-pointer"
                 >
                   +
                 </button>
               </div>
             ) : (
-              <button
-                onClick={() => onAddToCart(watch)}
-                className="flex-1 bg-gold hover:bg-white text-black py-4 font-mono font-bold tracking-[0.2em] transition-all duration-300 text-xs uppercase rounded-sm flex items-center justify-center gap-2 shadow-lg hover:shadow-gold/10"
-              >
-                Acquire Specific Series — {getFormattedPrice(watch.price)}
-              </button>
+              <div className="flex flex-1 gap-3 items-stretch">
+                {/* Quantity selector */}
+                <div className="flex items-center border border-neutral-900 rounded-sm bg-neutral-950/60 px-3 font-mono gap-3 select-none">
+                  <button 
+                    onClick={() => setQuantity(q => Math.max(1, q - 1))}
+                    disabled={quantity <= 1}
+                    className="w-6 h-full flex items-center justify-center hover:text-gold text-neutral-500 disabled:text-neutral-800 disabled:hover:text-neutral-800 text-sm transition-colors font-bold cursor-pointer"
+                  >
+                    -
+                  </button>
+                  <span className="text-white text-xs font-bold w-5 text-center">{quantity}</span>
+                  <button 
+                    onClick={() => setQuantity(q => q + 1)}
+                    className="w-6 h-full flex items-center justify-center hover:text-gold text-neutral-500 text-sm transition-colors font-bold cursor-pointer"
+                  >
+                    +
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => {
+                    onAddToCart(product);
+                    if (quantity > 1 && onUpdateQty) {
+                      onUpdateQty(product.id, quantity - 1);
+                    }
+                  }}
+                  className="flex-1 bg-gold hover:bg-white text-black py-4 font-mono font-bold tracking-[0.15em] transition-all duration-300 text-[11px] uppercase rounded-sm flex items-center justify-center gap-2 shadow-lg hover:shadow-gold/10 cursor-pointer"
+                >
+                  Acquire Series — {getFormattedPrice(product.price * quantity)}
+                </button>
+              </div>
             )}
+            
             <button
-              onClick={() => onToggleWishlist(watch.id)}
-              className="bg-transparent border border-neutral-900 hover:border-gold hover:text-white text-neutral-400 hover:scale-[1.02] active:scale-[0.98] px-6 py-4 text-xs font-mono font-bold tracking-[0.2em] transition-all duration-300 uppercase rounded-sm flex items-center justify-center gap-2"
+              onClick={() => onToggleWishlist(product.id)}
+              className="bg-transparent border border-neutral-900 hover:border-gold hover:text-white text-neutral-400 hover:scale-[1.02] active:scale-[0.98] px-6 py-4 text-xs font-mono font-bold tracking-[0.2em] transition-all duration-300 uppercase rounded-sm flex items-center justify-center gap-2 cursor-pointer"
               aria-label={isLiked ? "Retract from wishlist" : "Secure to wishlist"}
             >
               <Heart size={14} className={cn("transition-colors", isLiked ? "fill-red-500 text-red-500" : "text-neutral-500")} />
@@ -2481,7 +2649,7 @@ const ProductPage = ({
             </button>
           </div>
 
-          {/* Highlights grids of constraints (Shipping, Warranty) */}
+          {/* Highlights grids of concerns (Shipping, Warranty) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-6 text-xs text-neutral-400">
             <div className="p-4 bg-neutral-950/40 border border-neutral-900 rounded-xl space-y-2">
               <div className="flex items-center gap-2 text-gold">
@@ -2489,7 +2657,7 @@ const ProductPage = ({
                 <span className="font-mono font-bold uppercase tracking-wider text-[10px]">India Carrier Logistics</span>
               </div>
               <p className="text-[11px] font-sans leading-relaxed text-neutral-400">
-                Delivery operations are exclusive to **India**. Secure transit rates of **{getDynamicShippingChargesText(watch.price)}** calculated relative to item insurance.
+                Delivery operations are exclusive to **India**. Secure transit rates of **{getDynamicShippingChargesText(product.price)}** calculated relative to item insurance.
               </p>
             </div>
 
@@ -2691,7 +2859,7 @@ const ProductPage = ({
         <div className="space-y-2">
           <span className="text-gold text-[9px] font-mono tracking-[0.25em] font-bold block uppercase pb-1">COMPLEMENTARY SPECIMENS</span>
           <h3 className="text-2xl font-serif font-bold text-white tracking-snug">Similar Horological Series</h3>
-          <p className="text-neutral-400 text-xs">Exquisite companion models matching the same rigorous standards.</p>
+          <p className="text-neutral-400 text-xs">Exquisite companion models matching the same category standards.</p>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">

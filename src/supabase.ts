@@ -88,6 +88,26 @@ export const getSupabaseProducts = async (): Promise<SupabaseProduct[]> => {
   }
 };
 
+export const getSupabaseProductById = async (id: string): Promise<SupabaseProduct | null> => {
+  if (!supabase) return null;
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+
+    if (error) {
+      console.error(`[Supabase Product By ID] Failed to load product ${id} from database:`, error);
+      return null;
+    }
+    return data;
+  } catch (err) {
+    console.error(`[Supabase Product By ID Exception] Failed inside getSupabaseProductById query for ${id}:`, err);
+    return null;
+  }
+};
+
 // 2. Profile / User Operations
 export const getSupabaseProfile = async (uid: string): Promise<SupabaseProfile | null> => {
   if (!supabase) return null;
