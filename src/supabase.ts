@@ -29,6 +29,8 @@ export interface SupabaseProduct {
   image: string;
   category: "Classic" | "Sport" | "Minimalist" | "Luxury";
   description: string;
+  image_url?: string;
+  stock_quantity?: number;
   created_at?: string;
 }
 
@@ -105,6 +107,88 @@ export const getSupabaseProductById = async (id: string): Promise<SupabaseProduc
   } catch (err) {
     console.error(`[Supabase Product By ID Exception] Failed inside getSupabaseProductById query for ${id}:`, err);
     return null;
+  }
+};
+
+export const createSupabaseProduct = async (productData: Omit<SupabaseProduct, "id">): Promise<SupabaseProduct | null> => {
+  if (!supabase) return null;
+  const payload: any = {
+    name: productData.name,
+    price: productData.price,
+    description: productData.description,
+    category: productData.category,
+    image: productData.image_url || productData.image || ""
+  };
+  
+  try {
+    const fullPayload = {
+      ...payload,
+      image_url: productData.image_url || productData.image || "",
+      stock_quantity: productData.stock_quantity ?? 10
+    };
+    const { data, error } = await supabase.from("products").insert([fullPayload]).select().maybeSingle();
+    if (!error && data) return data;
+    console.warn("[Supabase Product Match Alert] First insert attempt with image_url/stock_quantity column failed, retrying default fields...", error);
+  } catch (err) {
+    console.warn("[Supabase Product Exception Alert] Retrying default fields insertion:", err);
+  }
+
+  const { data, error } = await supabase.from("products").insert([payload]).select().maybeSingle();
+  if (error) {
+    console.error("[Supabase Product Create Error]", error);
+    throw error;
+  }
+  return data;
+};
+
+export const updateSupabaseProduct = async (id: string, productData: Partial<SupabaseProduct>): Promise<SupabaseProduct | null> => {
+  if (!supabase) return null;
+  const payload: any = {
+    name: productData.name,
+    price: productData.price,
+    description: productData.description,
+    category: productData.category,
+    image: productData.image_url || productData.image
+  };
+  
+  // Clean fields that might be undefined
+  Object.keys(payload).forEach(key => payload[key] === undefined && delete payload[key]);
+
+  try {
+    const fullPayload = {
+      ...payload,
+      image_url: productData.image_url || productData.image,
+      stock_quantity: productData.stock_quantity
+    };
+    Object.keys(fullPayload).forEach(key => fullPayload[key] === undefined && delete fullPayload[key]);
+
+    const { data, error } = await supabase.from("products").update(fullPayload).eq("id", id).select().maybeSingle();
+    if (!error && data) return data;
+    console.warn("[Supabase Product Match Alert] First update attempt with image_url/stock_quantity columns failed, retrying default fields...", error);
+  } catch (err) {
+    console.warn("[Supabase Product Exception Alert] Retrying default fields update:", err);
+  }
+
+  const { data, error } = await supabase.from("products").update(payload).eq("id", id).select().maybeSingle();
+  if (error) {
+    console.error("[Supabase Product Update Error]", error);
+    throw error;
+  }
+  return data;
+};
+
+export const deleteSupabaseProduct = async (id: string): Promise<boolean> => {
+  if (!supabase) return false;
+  try {
+    const { error } = await supabase.from("products").delete().eq("id", id);
+    if (error) {
+      console.error("[Supabase Product Delete Error]", error);
+      throw error;
+    }
+    return true;
+  } catch (err) {
+    console.error("[Supabase Product Delete Exception]", err);
+    throw err;
   }
 };
 
