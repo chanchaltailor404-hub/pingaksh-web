@@ -65,7 +65,13 @@ import {
   getSupabaseProductById,
   createSupabaseProduct,
   updateSupabaseProduct,
-  deleteSupabaseProduct
+  deleteSupabaseProduct,
+  getSupabaseNewsletterSubscribers,
+  getSupabaseAllProfiles,
+  getSupabaseAllWishlists,
+  getSupabaseAllCartItems,
+  getWishlistTableName,
+  getCartTableName
 } from "./supabase";
 import WatchAssistant from "./components/WatchAssistant";
 
@@ -4621,6 +4627,19 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
   const [orders, setOrders] = useState<any[]>([]);
   const [isOrdersLoading, setIsOrdersLoading] = useState(false);
   
+  // Real-time administrative entities states
+  const [subscribers, setSubscribers] = useState<any[]>([]);
+  const [isSubscribersLoading, setIsSubscribersLoading] = useState(false);
+  const [wishlists, setWishlists] = useState<any[]>([]);
+  const [isWishlistsLoading, setIsWishlistsLoading] = useState(false);
+  const [carts, setCarts] = useState<any[]>([]);
+  const [isCartsLoading, setIsCartsLoading] = useState(false);
+  const [profiles, setProfiles] = useState<any[]>([]);
+  const [isProfilesLoading, setIsProfilesLoading] = useState(false);
+  
+  // Active luxury dashboard navigation tab switcher
+  const [activeTab, setActiveTab] = useState<"products" | "orders" | "subscribers" | "wishlists" | "carts">("products");
+
   // Custom interactive toast notifications array
   const [toasts, setToasts] = useState<{ id: string; type: "success" | "error" | "info"; message: string }[]>([]);
 
@@ -4682,11 +4701,75 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
     }
   };
 
+  // Load newsletter subscriber records
+  const loadAdminSubscribers = async (isBackground = false) => {
+    if (!isBackground) setIsSubscribersLoading(true);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const dbSubs = await getSupabaseNewsletterSubscribers();
+        setSubscribers(dbSubs || []);
+      }
+    } catch (err) {
+      console.error("Failed loading subscribers:", err);
+    } finally {
+      if (!isBackground) setIsSubscribersLoading(false);
+    }
+  };
+
+  // Load user profiles to translate user UIDs to user names and emails
+  const loadAdminProfiles = async (isBackground = false) => {
+    if (!isBackground) setIsProfilesLoading(true);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const dbProfiles = await getSupabaseAllProfiles();
+        setProfiles(dbProfiles || []);
+      }
+    } catch (err) {
+      console.error("Failed loading Profiles:", err);
+    } finally {
+      if (!isBackground) setIsProfilesLoading(false);
+    }
+  };
+
+  // Load wishlist users & records
+  const loadAdminWishlists = async (isBackground = false) => {
+    if (!isBackground) setIsWishlistsLoading(true);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const dbWish = await getSupabaseAllWishlists();
+        setWishlists(dbWish || []);
+      }
+    } catch (err) {
+      console.error("Failed loading wishlists:", err);
+    } finally {
+      if (!isBackground) setIsWishlistsLoading(false);
+    }
+  };
+
+  // Load cart users & records
+  const loadAdminCarts = async (isBackground = false) => {
+    if (!isBackground) setIsCartsLoading(true);
+    try {
+      if (isSupabaseConfigured && supabase) {
+        const dbCart = await getSupabaseAllCartItems();
+        setCarts(dbCart || []);
+      }
+    } catch (err) {
+      console.error("Failed loading carts:", err);
+    } finally {
+      if (!isBackground) setIsCartsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!isAdmin) return;
 
     loadAdminProducts();
     loadAdminOrders();
+    loadAdminSubscribers();
+    loadAdminProfiles();
+    loadAdminWishlists();
+    loadAdminCarts();
 
     if (isSupabaseConfigured && supabase) {
       // Real-time PostgreSQL changes replication listener for watches
@@ -4713,9 +4796,63 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
         )
         .subscribe();
 
+      // Real-time subscribers subscription
+      const subscribersChannel = supabase
+        .channel("admin-realtime-subscribers-changes")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "newsletter_subscribers" },
+          () => {
+            loadAdminSubscribers(true);
+          }
+        )
+        .subscribe();
+
+      // Real-time profiles subscription
+      const profilesChannel = supabase
+        .channel("admin-realtime-profiles-changes")
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "profiles" },
+          () => {
+            loadAdminProfiles(true);
+          }
+        )
+        .subscribe();
+
+      // Setup dynamic table listeners for Wishlist and Cart
+      getWishlistTableName().then(tableName => {
+        if (!supabase) return;
+        supabase
+          .channel("admin-realtime-wishlist-changes")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: tableName || "wishlist" },
+            () => {
+              loadAdminWishlists(true);
+            }
+          )
+          .subscribe();
+      });
+
+      getCartTableName().then(tableName => {
+        if (!supabase) return;
+        supabase
+          .channel("admin-realtime-cart-changes")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: tableName || "cart" },
+            () => {
+              loadAdminCarts(true);
+            }
+          )
+          .subscribe();
+      });
+
       return () => {
-        supabase.removeChannel(productsChannel);
-        supabase.removeChannel(ordersChannel);
+        if (supabase) {
+          supabase.removeAllChannels();
+        }
       };
     } else {
       setWatches(WATCHES);
@@ -5234,30 +5371,35 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
         </div>
 
         {/* Dynamic Analytics Stats Summary Bento Bar */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
           <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Chronology Pieces</p>
+            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Specimens Cataloged</p>
             <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
-              {watches.length} <span className="text-[10px] text-gold font-mono uppercase tracking-widest ml-1 font-semibold">Specimens</span>
+              {watches.length} <span className="text-[10px] text-gold font-mono uppercase tracking-widest ml-1 font-semibold">Pieces</span>
             </p>
           </div>
           <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Acquisition Value</p>
-            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
+            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Estimated Assets</p>
+            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1 select-none">
               {getFormattedPrice(watches.reduce((acc, curr) => acc + (curr.price || 0), 0))}
             </p>
           </div>
           <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Orders Logged</p>
+            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Logistics Shipments</p>
             <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
-              {orders.length} <span className="text-[10px] text-blue-400 font-mono uppercase tracking-widest ml-1 font-semibold">Active</span>
+              {orders.length} <span className="text-[10px] text-blue-400 font-mono uppercase tracking-widest ml-1 font-semibold">Orders</span>
             </p>
           </div>
           <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Logistics State</p>
-            <p className="text-base md:text-lg font-mono text-emerald-400 mt-2 font-semibold uppercase tracking-wider flex items-center gap-1.5 leading-none">
-              <span className="w-2 h-2 rounded-full col-span-1 bg-emerald-400 animate-ping inline-block shrink-0" />
-              Connected
+            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Active Subscribers</p>
+            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
+              {subscribers.length} <span className="text-[10px] text-amber-400 font-mono uppercase tracking-widest ml-1 font-semibold">Emails</span>
+            </p>
+          </div>
+          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md col-span-2 md:col-span-1">
+            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Engagement State</p>
+            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
+              {wishlists.length} / {carts.length} <span className="text-[9px] text-emerald-400 font-mono uppercase tracking-widest ml-1 font-bold">W & C</span>
             </p>
           </div>
         </div>
@@ -5452,134 +5594,165 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
           )}
         </AnimatePresence>
 
-        {/* Dynamic Skeleton Loader while products wait for database retrieval */}
-        {isProductsLoading ? (
-          <div className="space-y-4">
-            <h2 className="text-xl font-serif font-bold text-neutral-400 uppercase tracking-wide animate-pulse">Retrieving collections...</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {[1, 2, 3, 4].map((skeleton) => (
-                <div key={skeleton} className="bg-neutral-900/10 border border-neutral-850 rounded-2xl p-4 space-y-4 animate-pulse">
-                  <div className="w-full h-48 bg-neutral-850 rounded-xl" />
-                  <div className="space-y-2">
-                    <div className="w-2/3 h-4 bg-neutral-850 rounded" />
-                    <div className="w-1/3 h-3 bg-neutral-850 rounded" />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
-                <span className="w-1.5 h-6 bg-gold rounded-full inline-block" />
-                Active Collections
-              </h2>
-              <p className="text-xs text-neutral-400 mt-1">Deploy or withdraw chronological products. Click edit coordinates to change properties.</p>
-            </div>
+        {/* Sleek Tabbed Console Navigation for Admins */}
+        <div className="flex border-b border-neutral-900 gap-1 overflow-x-auto shrink-0 py-1">
+          {[
+            { id: "products", label: "PRODUCTS", count: watches.length },
+            { id: "orders", label: "DELIVERIES", count: orders.length },
+            { id: "subscribers", label: "SUBSCRIBERS", count: subscribers.length },
+            { id: "wishlists", label: "WISHLISTS", count: wishlists.length },
+            { id: "carts", label: "CUSTOMER CARTS", count: carts.length }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id as any)}
+              className={`px-5 py-3 font-mono text-xs tracking-widest font-bold border-b-2 transition-all duration-300 relative flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+                activeTab === tab.id 
+                  ? "border-gold text-white bg-neutral-900/20" 
+                  : "border-transparent text-neutral-400 hover:text-neutral-200 hover:border-neutral-800"
+              }`}
+            >
+              {tab.label}
+              <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                activeTab === tab.id ? "bg-gold/15 text-gold" : "bg-neutral-800 text-neutral-500"
+              }`}>
+                {tab.count}
+              </span>
+            </button>
+          ))}
+        </div>
 
-            {/* Watches Grid Section */}
-            {watches.length === 0 ? (
-              <div className="border border-neutral-850 rounded-2xl p-12 text-center bg-neutral-900/10">
-                <p className="text-neutral-500 font-serif italic text-lg">No collections specimens logged inside memory storage.</p>
-                <button onClick={handleSeedData} className="text-gold font-mono font-bold mt-4 text-xs tracking-widest hover:underline cursor-pointer">TRIGGER RESTORATION SEEDING</button>
+        {/* --- 1. PRODUCTS TAB VIEW --- */}
+        {activeTab === "products" && (
+          <div>
+            {isProductsLoading ? (
+              <div className="space-y-4">
+                <h2 className="text-xl font-serif font-bold text-neutral-400 uppercase tracking-wide animate-pulse">Retrieving collections...</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {[1, 2, 3, 4].map((skeleton) => (
+                    <div key={skeleton} className="bg-neutral-900/10 border border-neutral-850 rounded-2xl p-4 space-y-4 animate-pulse">
+                      <div className="w-full h-48 bg-neutral-850 rounded-xl" />
+                      <div className="space-y-2">
+                        <div className="w-2/3 h-4 bg-neutral-850 rounded" />
+                        <div className="w-1/3 h-3 bg-neutral-850 rounded" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {watches.map(watch => {
-                  const hasStock = watch.stock_quantity !== undefined;
-                  const stockCount = watch.stock_quantity ?? 10;
-                  return (
-                    <motion.div 
-                      key={watch.id}
-                      layout
-                      initial={{ opacity: 0, scale: 0.98 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      transition={{ duration: 0.4 }}
-                      className="bg-neutral-900/30 border border-neutral-800 rounded-2xl overflow-hidden flex flex-col justify-between hover:border-gold/30 transition-all duration-300 h-full hover:shadow-xl hover:shadow-amber-500/[0.02] group"
-                    >
-                      
-                      {/* Watch Photo section */}
-                      <div className="w-full h-48 bg-neutral-950 relative overflow-hidden shrink-0">
-                        <img 
-                          src={watch.image || watch.image_url} 
-                          alt={watch.name} 
-                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            (e.target as any).src = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
-                          }}
-                        />
-                        <div className="absolute top-3 left-3 flex flex-col gap-1.5">
-                          <span className="text-[8px] font-mono font-bold bg-black/80 text-gold px-2.5 py-1 rounded border border-gold/10 uppercase tracking-widest">
-                            {watch.category}
-                          </span>
-                        </div>
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
+                    <span className="w-1.5 h-6 bg-gold rounded-full inline-block" />
+                    Active Collections
+                  </h2>
+                  <p className="text-xs text-neutral-400 mt-1">Deploy or withdraw chronological products. Click edit coordinates to change properties.</p>
+                </div>
 
-                        {/* Stock Quantity level info marker */}
-                        <div className="absolute bottom-3 right-3">
-                          <span className={`text-[8px] font-mono font-bold px-2 py-1 rounded border uppercase tracking-widest leading-none ${
-                            stockCount === 0 ? "bg-red-950/80 border-red-500/30 text-red-400" :
-                            stockCount <= 5 ? "bg-amber-950/80 border-amber-500/30 text-amber-400" :
-                            "bg-emerald-950/80 border-emerald-500/30 text-emerald-400"
-                          }`}>
-                            {stockCount === 0 ? "OUT OF STOCK" : `${stockCount} IN STOCK`}
-                          </span>
-                        </div>
-                      </div>
+                {/* Watches Grid Section */}
+                {watches.length === 0 ? (
+                  <div className="border border-neutral-850 rounded-2xl p-12 text-center bg-neutral-900/10">
+                    <p className="text-neutral-500 font-serif italic text-lg">No collections specimens logged inside memory storage.</p>
+                    <button onClick={handleSeedData} className="text-gold font-mono font-bold mt-4 text-xs tracking-widest hover:underline cursor-pointer">TRIGGER RESTORATION SEEDING</button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    {watches.map(watch => {
+                      const stockCount = watch.stock_quantity ?? 10;
+                      return (
+                        <motion.div 
+                          key={watch.id}
+                          layout
+                          initial={{ opacity: 0, scale: 0.98 }}
+                          animate={{ opacity: 1, scale: 1 }}
+                          transition={{ duration: 0.4 }}
+                          className="bg-neutral-900/30 border border-neutral-800 rounded-2xl overflow-hidden flex flex-col justify-between hover:border-gold/30 transition-all duration-300 h-full hover:shadow-xl hover:shadow-amber-500/[0.02] group"
+                        >
+                          
+                          {/* Watch Photo section */}
+                          <div className="w-full h-48 bg-neutral-950 relative overflow-hidden shrink-0">
+                            <img 
+                              src={watch.image || watch.image_url} 
+                              alt={watch.name} 
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" 
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                (e.target as any).src = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                              }}
+                            />
+                            <div className="absolute top-3 left-3 flex flex-col gap-1.5">
+                              <span className="text-[8px] font-mono font-bold bg-black/80 text-gold px-2.5 py-1 rounded border border-gold/10 uppercase tracking-widest">
+                                {watch.category}
+                              </span>
+                            </div>
 
-                      {/* Content Section details */}
-                      <div className="p-5 flex-1 flex flex-col justify-between space-y-4 bg-neutral-950/20">
-                        <div className="space-y-1.5">
-                          <h3 className="font-serif font-bold text-base text-white tracking-tight leading-snug">{watch.name}</h3>
-                          <p className="font-mono font-bold text-xs text-gold">{getFormattedPrice(watch.price)}</p>
-                          <p className="text-[11px] text-neutral-400 line-clamp-2 leading-relaxed font-sans">{watch.description}</p>
-                        </div>
+                            {/* Stock Quantity level info marker */}
+                            <div className="absolute bottom-3 right-3">
+                              <span className={`text-[8px] font-mono font-bold px-2 py-1 rounded border uppercase tracking-widest leading-none ${
+                                stockCount === 0 ? "bg-red-950/80 border-red-500/30 text-red-400" :
+                                stockCount <= 5 ? "bg-amber-950/80 border-amber-500/30 text-amber-400" :
+                                "bg-emerald-950/80 border-emerald-500/30 text-emerald-400"
+                              }`}>
+                                {stockCount === 0 ? "OUT OF STOCK" : `${stockCount} IN STOCK`}
+                              </span>
+                            </div>
+                          </div>
 
-                        {/* Actions modifier bar */}
-                        <div className="flex justify-end gap-1.5 pt-3 border-t border-neutral-900 flex-shrink-0">
-                          <button 
-                            onClick={() => {
-                              setEditingId(watch.id);
-                              setIsAdding(false);
-                              setFormData({
-                                name: watch.name,
-                                price: watch.price,
-                                category: watch.category,
-                                image: watch.image,
-                                image_url: watch.image_url || watch.image,
-                                stock_quantity: watch.stock_quantity ?? 10,
-                                description: watch.description || ""
-                              });
-                              window.scrollTo({ top: 320, behavior: 'smooth' });
-                              showToast(`Loaded details of "${watch.name}" into editor.`, "info");
-                            }}
-                            className="p-2.5 bg-neutral-900/80 text-neutral-400 hover:text-white rounded border border-neutral-800 hover:border-neutral-700 transition-colors cursor-pointer"
-                            title="Refine coordinates"
-                          >
-                            <Edit2 size={13} />
-                          </button>
-                          <button 
-                            onClick={() => handleDelete(watch.id, watch.name)}
-                            className="p-2.5 bg-neutral-900/80 text-neutral-400 hover:text-red-400 rounded border border-neutral-800 hover:border-red-900/30 transition-colors cursor-pointer"
-                            title="Discard archive record"
-                          >
-                            <Trash2 size={13} />
-                          </button>
-                        </div>
-                      </div>
+                          {/* Content Section details */}
+                          <div className="p-5 flex-1 flex flex-col justify-between space-y-4 bg-neutral-950/20">
+                            <div className="space-y-1.5">
+                              <h3 className="font-serif font-bold text-base text-white tracking-tight leading-snug">{watch.name}</h3>
+                              <p className="font-mono font-bold text-xs text-gold">{getFormattedPrice(watch.price)}</p>
+                              <p className="text-[11px] text-neutral-400 line-clamp-2 leading-relaxed font-sans">{watch.description}</p>
+                            </div>
 
-                    </motion.div>
-                  );
-                })}
+                            {/* Actions modifier bar */}
+                            <div className="flex justify-end gap-1.5 pt-3 border-t border-neutral-900 flex-shrink-0">
+                              <button 
+                                onClick={() => {
+                                  setEditingId(watch.id);
+                                  setIsAdding(false);
+                                  setFormData({
+                                    name: watch.name,
+                                    price: watch.price,
+                                    category: watch.category,
+                                    image: watch.image,
+                                    image_url: watch.image_url || watch.image,
+                                    stock_quantity: watch.stock_quantity ?? 10,
+                                    description: watch.description || ""
+                                  });
+                                  window.scrollTo({ top: 320, behavior: 'smooth' });
+                                  showToast(`Loaded details of "${watch.name}" into editor.`, "info");
+                                }}
+                                className="p-2.5 bg-neutral-900/80 text-neutral-400 hover:text-white rounded border border-neutral-800 hover:border-neutral-700 transition-colors cursor-pointer"
+                                title="Refine coordinates"
+                              >
+                                <Edit2 size={13} />
+                              </button>
+                              <button 
+                                onClick={() => handleDelete(watch.id, watch.name)}
+                                className="p-2.5 bg-neutral-900/80 text-neutral-400 hover:text-red-400 rounded border border-neutral-850 hover:border-red-900/30 transition-colors cursor-pointer"
+                                title="Discard archive record"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            </div>
+                          </div>
+
+                        </motion.div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
 
-        {/* Logistics Customer Shipments table panel */}
-        {isSupabaseConfigured && (
-          <div className="space-y-6 pt-10 border-t border-neutral-900">
+        {/* --- 2. ORDERS DELIVERIES TAB VIEW --- */}
+        {activeTab === "orders" && (
+          <div className="space-y-6">
             <div>
               <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
                 <span className="w-1.5 h-6 bg-gold rounded-full inline-block" />
@@ -5638,7 +5811,7 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                           <select
                             value={ord.status}
                             onChange={(e) => handleUpdateStatus(ord.id, e.target.value as any)}
-                            className="bg-neutral-950 border border-neutral-800 rounded px-3 py-1.5 focus:outline-none focus:border-gold text-xs text-neutral-300"
+                            className="bg-neutral-950 border border-neutral-800 rounded px-3 py-1.5 focus:outline-none focus:border-gold text-xs text-neutral-300 cursor-pointer"
                           >
                             <option value="calibrating">Calibrating</option>
                             <option value="transit">Transit</option>
@@ -5649,6 +5822,213 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                         </td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --- 3. NEWSLETTER SUBSCRIBERS TAB VIEW --- */}
+        {activeTab === "subscribers" && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
+                <span className="w-1.5 h-6 bg-gold rounded-full inline-block" />
+                Newsletter Subscriptions Feed
+              </h2>
+              <p className="text-xs text-neutral-400 mt-1">Real-time chronicle reader list of subscribed customer emails.</p>
+            </div>
+
+            {isSubscribersLoading ? (
+              <div className="border border-neutral-800 rounded-2xl p-8 bg-neutral-900/10 space-y-4 animate-pulse">
+                <div className="h-6 bg-neutral-850 rounded w-1/4" />
+                <div className="h-12 bg-neutral-850 rounded w-full" />
+              </div>
+            ) : subscribers.length === 0 ? (
+              <div className="border border-neutral-850 rounded-2xl p-10 text-center bg-neutral-900/10">
+                <p className="text-neutral-500 font-serif italic">No subscriptions registered inside the records yet.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto bg-neutral-900/20 border border-neutral-800 rounded-xl">
+                <table className="w-full text-left border-collapse text-xs text-neutral-300">
+                  <thead>
+                    <tr className="border-b border-neutral-850 text-neutral-400 font-mono text-[9px] uppercase tracking-widest bg-neutral-950/40">
+                      <th className="py-4 px-6 font-bold">Email Address</th>
+                      <th className="py-4 px-6 font-bold">Join Date</th>
+                      <th className="py-4 px-6 font-bold">Logistics State</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-900/40 font-sans">
+                    {subscribers.map((sub: any, idx: number) => (
+                      <tr key={sub.id || idx} className="hover:bg-neutral-900/20 mr-1">
+                        <td className="py-4 px-6 font-mono font-bold text-neutral-200">
+                          {sub.email}
+                        </td>
+                        <td className="py-4 px-6 text-neutral-400 font-mono">
+                          {sub.created_at ? new Date(sub.created_at).toLocaleString() : "Undated"}
+                        </td>
+                        <td className="py-4 px-6 font-mono text-[9px] font-bold text-emerald-400 flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          Authenticated Live
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --- 4. WISHLIST CATALOG CONTROLS --- */}
+        {activeTab === "wishlists" && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
+                <span className="w-1.5 h-6 bg-gold rounded-full inline-block" />
+                Customer Wishlists Catalog
+              </h2>
+              <p className="text-xs text-neutral-400 mt-1">Specimen tracking roster displaying items currently held in buyer wishlist records.</p>
+            </div>
+
+            {isWishlistsLoading ? (
+              <div className="border border-neutral-800 rounded-2xl p-8 bg-neutral-900/10 space-y-4 animate-pulse">
+                <div className="h-6 bg-neutral-850 rounded w-1/4" />
+                <div className="h-12 bg-neutral-850 rounded w-full" />
+              </div>
+            ) : wishlists.length === 0 ? (
+              <div className="border border-neutral-850 rounded-2xl p-10 text-center bg-neutral-900/10">
+                <p className="text-neutral-500 font-serif italic">No wishlist items registered inside user records.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto bg-neutral-900/20 border border-neutral-800 rounded-xl">
+                <table className="w-full text-left border-collapse text-xs text-neutral-300">
+                  <thead>
+                    <tr className="border-b border-neutral-850 text-neutral-400 font-mono text-[9px] uppercase tracking-widest bg-neutral-950/40">
+                      <th className="py-4 px-6 font-bold">Customer Account</th>
+                      <th className="py-4 px-6 font-bold">Watch Specimen</th>
+                      <th className="py-4 px-6 font-bold">Asset ID</th>
+                      <th className="py-4 px-6 font-bold">Date Synchronized</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-900/40 font-sans">
+                    {wishlists.map((wish: any, idx: number) => {
+                      const profile = profiles.find(p => p.id === wish.user_id);
+                      const email = profile?.email || "Guest (" + wish.user_id.substring(0, 6) + ")";
+                      const name = profile?.name || "Anonymous User";
+                      const matchWatch = watches.find(w => w.id === wish.product_id);
+                      const watchName = matchWatch?.name || "Premium Chronograph";
+                      const watchImg = matchWatch?.image || matchWatch?.image_url || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                      
+                      return (
+                        <tr key={wish.id || idx} className="hover:bg-neutral-900/20">
+                          <td className="py-4 px-6">
+                            <div className="font-semibold text-neutral-200">{email}</div>
+                            <div className="text-[10px] text-neutral-500 mt-0.5">{name}</div>
+                          </td>
+                          <td className="py-4 px-6 flex items-center gap-3">
+                            <img 
+                              src={watchImg} 
+                              alt={watchName} 
+                              className="w-10 h-10 object-cover rounded border border-neutral-800 bg-neutral-900" 
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                (e.target as any).src = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                              }}
+                            />
+                            <span className="font-serif font-bold text-white text-xs">{watchName}</span>
+                          </td>
+                          <td className="py-4 px-6 font-mono text-neutral-400 text-[11px]">
+                            {wish.product_id.substring(0, 8).toUpperCase()}...
+                          </td>
+                          <td className="py-4 px-6 text-neutral-400 font-mono text-[10px]">
+                            {wish.created_at ? new Date(wish.created_at).toLocaleDateString() : "Undated"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* --- 5. SHOPPING CARTS TAB VIEW --- */}
+        {activeTab === "carts" && (
+          <div className="space-y-6">
+            <div>
+              <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
+                <span className="w-1.5 h-6 bg-gold rounded-full inline-block" />
+                Customer Shopping Carts
+              </h2>
+              <p className="text-xs text-neutral-400 mt-1">Roster mapping dynamic cart operations, showing quantities and unpurchased valuation estimates.</p>
+            </div>
+
+            {isCartsLoading ? (
+              <div className="border border-neutral-800 rounded-2xl p-8 bg-neutral-900/10 space-y-4 animate-pulse">
+                <div className="h-6 bg-neutral-850 rounded w-1/4" />
+                <div className="h-12 bg-neutral-850 rounded w-full" />
+              </div>
+            ) : carts.length === 0 ? (
+              <div className="border border-neutral-850 rounded-2xl p-10 text-center bg-neutral-900/10">
+                <p className="text-neutral-500 font-serif italic">No active customer carts registered in dynamic databases.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto bg-neutral-900/20 border border-neutral-800 rounded-xl">
+                <table className="w-full text-left border-collapse text-xs text-neutral-300">
+                  <thead>
+                    <tr className="border-b border-neutral-850 text-neutral-400 font-mono text-[9px] uppercase tracking-widest bg-neutral-950/40">
+                      <th className="py-4 px-6 font-bold">Customer Account</th>
+                      <th className="py-4 px-6 font-bold">Watch Specimen</th>
+                      <th className="py-4 px-6 font-bold">Unit Assessment</th>
+                      <th className="py-4 px-6 font-bold">Quantity</th>
+                      <th className="py-4 px-6 font-bold">Subtotal Value</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-900/40 font-sans">
+                    {carts.map((cartItem: any, idx: number) => {
+                      const profile = profiles.find(p => p.id === cartItem.user_id);
+                      const email = profile?.email || "Guest (" + cartItem.user_id.substring(0, 6) + ")";
+                      const name = profile?.name || "Anonymous User";
+                      const matchWatch = watches.find(w => w.id === cartItem.product_id);
+                      const watchName = matchWatch?.name || "Premium Chronograph";
+                      const watchImg = matchWatch?.image || matchWatch?.image_url || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                      const qty = cartItem.quantity || 1;
+                      const price = matchWatch?.price || 0;
+                      const subtotal = qty * price;
+                      
+                      return (
+                        <tr key={cartItem.id || idx} className="hover:bg-neutral-900/20">
+                          <td className="py-4 px-6">
+                            <div className="font-semibold text-neutral-200">{email}</div>
+                            <div className="text-[10px] text-neutral-500 mt-0.5">{name}</div>
+                          </td>
+                          <td className="py-4 px-6 flex items-center gap-3">
+                            <img 
+                              src={watchImg} 
+                              alt={watchName} 
+                              className="w-10 h-10 object-cover rounded border border-neutral-800 bg-neutral-900" 
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                (e.target as any).src = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                              }}
+                            />
+                            <span className="font-serif font-bold text-white text-xs">{watchName}</span>
+                          </td>
+                          <td className="py-4 px-6 font-mono text-[11px] text-neutral-300">
+                            {price > 0 ? getFormattedPrice(price) : "Evaluating"}
+                          </td>
+                          <td className="py-4 px-6 font-mono font-bold text-neutral-200 text-xs">
+                            x {qty}
+                          </td>
+                          <td className="py-4 px-6 font-mono font-bold text-gold text-xs">
+                            {price > 0 ? getFormattedPrice(subtotal) : "Processing"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

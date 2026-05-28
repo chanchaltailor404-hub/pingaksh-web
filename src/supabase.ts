@@ -217,7 +217,7 @@ export const getSupabaseProfile = async (uid: string): Promise<SupabaseProfile |
 let cachedCartTable: "cart" | "cart_items" | null = null;
 let cachedWishlistTable: "wishlist" | "wishlists" | null = null;
 
-async function getCartTableName(): Promise<"cart" | "cart_items"> {
+export async function getCartTableName(): Promise<"cart" | "cart_items"> {
   if (cachedCartTable) return cachedCartTable;
   if (!supabase) return "cart";
   try {
@@ -233,7 +233,7 @@ async function getCartTableName(): Promise<"cart" | "cart_items"> {
   return "cart_items";
 }
 
-async function getWishlistTableName(): Promise<"wishlist" | "wishlists"> {
+export async function getWishlistTableName(): Promise<"wishlist" | "wishlists"> {
   if (cachedWishlistTable) return cachedWishlistTable;
   if (!supabase) return "wishlist";
   try {
@@ -948,3 +948,89 @@ export const saveSupabaseProfile = async (uid: string, name: string, email: stri
     throw err;
   }
 };
+
+// 11. Fetch Newsletter Subscribers
+export interface SupabaseSubscriber {
+  id?: string;
+  email: string;
+  created_at?: string;
+}
+
+export const getSupabaseNewsletterSubscribers = async (): Promise<SupabaseSubscriber[]> => {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("newsletter_subscribers")
+      .select("*")
+      .order("created_at", { ascending: false });
+    
+    if (error) {
+      console.error("[Supabase Admin Subscribers] Error retrieving:", error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Admin Subscribers Exception] getSupabaseNewsletterSubscribers:", err);
+    return [];
+  }
+};
+
+// 12. Fetch All User Profiles
+export const getSupabaseAllProfiles = async (): Promise<SupabaseProfile[]> => {
+  if (!supabase) return [];
+  try {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*");
+    
+    if (error) {
+      console.error("[Supabase Admin Profiles] Error fetching profiles:", error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Admin Profiles Exception] getSupabaseAllProfiles:", err);
+    return [];
+  }
+};
+
+// 13. Fetch All Wishlist Items Across Users
+export const getSupabaseAllWishlists = async (): Promise<any[]> => {
+  if (!supabase) return [];
+  try {
+    const tableName = await getWishlistTableName();
+    const { data, error } = await supabase
+      .from(tableName || "wishlist")
+      .select("*");
+    
+    if (error) {
+      console.error(`[Supabase Admin Wishlists] Error retrieving from ${tableName}:`, error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Admin Wishlists Exception] getSupabaseAllWishlists:", err);
+    return [];
+  }
+};
+
+// 14. Fetch All Cart Items Across Users
+export const getSupabaseAllCartItems = async (): Promise<any[]> => {
+  if (!supabase) return [];
+  try {
+    const tableName = await getCartTableName();
+    const { data, error } = await supabase
+      .from(tableName || "cart")
+      .select("*");
+    
+    if (error) {
+      console.error(`[Supabase Admin Carts] Error retrieving from ${tableName}:`, error);
+      return [];
+    }
+    return data || [];
+  } catch (err) {
+    console.error("[Supabase Admin Carts Exception] getSupabaseAllCartItems:", err);
+    return [];
+  }
+};
+
