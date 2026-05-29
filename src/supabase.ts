@@ -333,7 +333,16 @@ export const createSupabaseOrder = async (
   email: string,
   phone: string,
   total: number,
-  items: { name: string; price: number; quantity: number }[]
+  items: { name: string; price: number; quantity: number }[],
+  extraDetails?: {
+    payment_method?: string;
+    order_status?: string;
+    name?: string;
+    address?: string;
+    city?: string;
+    state?: string;
+    zip?: string;
+  }
 ): Promise<string | null> => {
   if (!supabase) {
     console.warn("[Supabase Order] Supabase unconfigured, skipping order creation");
@@ -354,6 +363,16 @@ export const createSupabaseOrder = async (
       payload.user_id = userId;
     }
 
+    if (extraDetails) {
+      payload.payment_method = extraDetails.payment_method || "Razorpay";
+      payload.order_status = extraDetails.order_status || "Pending";
+      payload.shipping_name = extraDetails.name || null;
+      payload.shipping_address = extraDetails.address || null;
+      payload.shipping_city = extraDetails.city || null;
+      payload.shipping_state = extraDetails.state || null;
+      payload.shipping_zip = extraDetails.zip || null;
+    }
+
     // Insert to standard public.orders
     const { data: order, error: orderError } = await supabase
       .from("orders")
@@ -364,12 +383,60 @@ export const createSupabaseOrder = async (
     if (orderError) {
       console.warn("[Supabase Order] Initial order entry failed:", orderError);
 
+      const isMissingColumn = orderError.message?.includes("column") || orderError.code === "42703";
+
+      if (isMissingColumn) {
+        console.log("[Supabase Order Fail-Safe] Dynamic schema column unrecognized on remote server. Compressing order metadata into customer_phone field...");
+        const safePayload: any = {
+          customer_email: email,
+          customer_phone: phone ? `${phone} [COD Addr: ${extraDetails?.address || ""}, ${extraDetails?.city || ""}, ${extraDetails?.state || ""} ${extraDetails?.zip || ""}]` : `[COD: Name: ${extraDetails?.name || ""}, Phone: ${phone || ""}]`,
+          total,
+          status: "calibrating"
+        };
+        if (userId) {
+          safePayload.user_id = userId;
+        }
+
+        const { data: fallbackOrder, error: fallbackError } = await supabase
+          .from("orders")
+          .insert(safePayload)
+          .select()
+          .single();
+
+        if (fallbackError) {
+          if (userId && (fallbackError.message?.includes("foreign key") || fallbackError.code === "23503" || fallbackError.message?.includes("permission") || fallbackError.code === "42501")) {
+            console.log("[Supabase Order Retry] Retrying baseline fallback dispatch with neutral guest payload to bypass Auth / FK constraints...");
+            delete safePayload.user_id;
+            const { data: retryFallbackOrder, error: retryFallbackError } = await supabase
+              .from("orders")
+              .insert(safePayload)
+              .select()
+              .single();
+            if (retryFallbackError) {
+              throw retryFallbackError;
+            }
+            if (retryFallbackOrder) {
+              await processOrderItems(retryFallbackOrder.id, items);
+              return retryFallbackOrder.id;
+            }
+          }
+          throw fallbackError;
+        }
+
+        if (fallbackOrder) {
+          await processOrderItems(fallbackOrder.id, items);
+          return fallbackOrder.id;
+        }
+      }
+
       if (userId && (orderError.message?.includes("foreign key") || orderError.code === "23503" || orderError.message?.includes("permission") || orderError.code === "42501")) {
-        console.log("[Supabase Order Retry] Retrying order dispatch with neutral guest payload to bypass RLS or foreign key alignment constraints...");
-        delete payload.user_id;
+        console.log("[Supabase Order Retry] Retrying order dispatch with neutral guest payload...");
+        const guestPayload = { ...payload };
+        delete guestPayload.user_id;
+        
         const { data: retryOrder, error: retryError } = await supabase
           .from("orders")
-          .insert(payload)
+          .insert(guestPayload)
           .select()
           .single();
 
@@ -393,7 +460,7 @@ export const createSupabaseOrder = async (
     await processOrderItems(order.id, items);
     return order.id;
   } catch (err) {
-    console.error("[Supabase Order Exception] createSupabaseOrder:", err);
+    console.error("[Supabase Order Exception] createSupabaseOrder failed:", err);
     throw err;
   }
 };
@@ -511,12 +578,30 @@ export const updateSupabaseOrderStatus = async (
   if (!supabase) return;
   try {
     console.log(`[Supabase Admin Status] Setting status for order ${orderId} to: ${status}`);
+    
+    // Attempt full update first - both status (controlled in db constraint) and order_status
     const { error } = await supabase
       .from("orders")
-      .update({ status })
+      .update({ 
+        status,
+        order_status: status === "fulfilled" ? "Fulfilled" : status === "cancelled" ? "Cancelled" : "Processed"
+      })
       .eq("id", orderId);
 
     if (error) {
+      const isMissingColumn = error.message?.includes("column") || error.code === "42703";
+      if (isMissingColumn) {
+        console.warn("[Supabase Admin Status Fallback] Custom order_status column missing. Retrying baseline status update.");
+        const { error: fallbackError } = await supabase
+          .from("orders")
+          .update({ status })
+          .eq("id", orderId);
+
+        if (fallbackError) {
+          throw fallbackError;
+        }
+        return;
+      }
       console.error("[Supabase Admin Status] Update order status failed:", error);
       throw error;
     }

@@ -101,6 +101,13 @@ create table if not exists public.orders (
   customer_phone text,
   total numeric not null check (total >= 0),
   status text not null default 'calibrating' check (status in ('calibrating', 'transit', 'customs', 'fulfilled', 'cancelled')),
+  payment_method text default 'Razorpay',
+  order_status text default 'Pending',
+  shipping_name text,
+  shipping_address text,
+  shipping_city text,
+  shipping_state text,
+  shipping_zip text,
   created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

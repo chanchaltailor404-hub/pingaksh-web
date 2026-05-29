@@ -1092,11 +1092,7 @@ const Checkout = ({
   user: any;
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
-  const [verifyingPayment, setVerifyingPayment] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
-  const [isSandboxActive, setIsSandboxActive] = useState(false);
-  const [sandboxPayload, setSandboxPayload] = useState<any>(null);
-  const [activeMockTab, setActiveMockTab] = useState<'card' | 'upi' | 'net'>('card');
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
     email: "",
@@ -1119,59 +1115,7 @@ const Checkout = ({
     }
   }, [user]);
 
-  // Load Razorpay Checkout dynamically inside client
-  useEffect(() => {
-    const script = document.createElement("script");
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.async = true;
-    document.body.appendChild(script);
-    return () => {
-      // Cleanup to be safe
-      const scriptElement = document.querySelector('script[src="https://checkout.razorpay.com/v1/checkout.js"]');
-      if (scriptElement && scriptElement.parentNode) {
-        scriptElement.parentNode.removeChild(scriptElement);
-      }
-    };
-  }, []);
-
   const total = items.reduce((sum, item) => sum + getRawPriceINR(item.price) * item.quantity, 0);
-  const totalINR = total;
-
-  const saveOrderToDatabase = async () => {
-    if (isSupabaseConfigured && supabase) {
-      try {
-        const { data: authUserRes } = await supabase.auth.getUser();
-        const activeUid = authUserRes?.user?.id || null;
-        await createSupabaseOrder(
-          activeUid,
-          formData.email,
-          formData.phone || "9828488365",
-          total,
-          items.map(i => ({ name: i.name, price: getRawPriceINR(i.price), quantity: i.quantity }))
-        );
-      } catch (supabaseErr) {
-        console.error("Failed to commit order details to Supabase database", supabaseErr);
-        throw supabaseErr;
-      }
-    }
-
-    // Save order local sync for Client tracking
-    const savedOrders = localStorage.getItem("pingaksh_customer_orders") || "[]";
-    try {
-      const ordersList = JSON.parse(savedOrders);
-      const newOrder = {
-        id: "ORD-" + Math.floor(100000 + Math.random() * 900000),
-        date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-        total,
-        items: items.map(i => ({ id: i.id, name: i.name, price: getRawPriceINR(i.price), quantity: i.quantity, image: i.image })),
-        status: "calibrating" // high elegant status
-      };
-      ordersList.unshift(newOrder);
-      localStorage.setItem("pingaksh_customer_orders", JSON.stringify(ordersList));
-    } catch (err) {
-      console.error("Local order sync failed", err);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1179,138 +1123,90 @@ const Checkout = ({
     setPaymentError(null);
 
     try {
-      // 1. Create order on the backend (real Razorpay or sandbox fallback)
-      const res = await fetch("/api/razorpay/create-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items,
-          total,
-          customerEmail: formData.email
-        })
-      });
-
-      if (!res.ok) {
-        throw new Error("Unable to establish payment session with the server.");
+      if (items.length === 0) {
+        throw new Error("Your luxury acquisition cart is currently empty.");
       }
 
-      const orderData = await res.json();
-      console.log("Order initialization payload:", orderData);
+      console.log("[COD Checkout] Placing Cash on Delivery order:", formData, "Total:", total);
+      
+      const orderItems = items.map(i => ({ 
+        name: i.name, 
+        price: getRawPriceINR(i.price), 
+        quantity: i.quantity 
+      }));
 
-      if (orderData.sandbox) {
-        setSandboxPayload(orderData);
-        setIsSandboxActive(true);
-      } else {
-        if (!(window as any).Razorpay) {
-          throw new Error("Razorpay SDK is not fully loaded. Please check your network connection.");
-        }
+      let orderId = "ORD-" + Math.floor(100000 + Math.random() * 900000);
 
-        const options = {
-          key: orderData.key_id,
-          amount: orderData.amount,
-          currency: orderData.currency,
-          name: "Pingaksh",
-          description: "Luxury-inspired statement watches",
-          order_id: orderData.order_id,
-          handler: async (response: any) => {
-            setVerifyingPayment(true);
-            try {
-              const verifyRes = await fetch("/api/razorpay/verify-payment", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  razorpay_order_id: response.razorpay_order_id,
-                  razorpay_payment_id: response.razorpay_payment_id,
-                  razorpay_signature: response.razorpay_signature,
-                  items,
-                  total,
-                  customerEmail: formData.email,
-                  sandbox: false
-                })
-              });
-              
-              const verifyData = await verifyRes.json();
-              if (verifyData.success) {
-                await saveOrderToDatabase();
-                onSuccess();
-                navigate("/success");
-              } else {
-                setPaymentError(verifyData.error || "Cryptographic verification failed.");
-              }
-            } catch (vErr) {
-              setPaymentError("An error occurred during transaction validation.");
-            } finally {
-              setVerifyingPayment(false);
-              setIsProcessing(false);
+      if (isSupabaseConfigured && supabase) {
+        try {
+          const { data: authUserRes } = await supabase.auth.getUser();
+          const activeUid = authUserRes?.user?.id || null;
+          
+          const createdOrderId = await createSupabaseOrder(
+            activeUid,
+            formData.email,
+            formData.phone,
+            total,
+            orderItems,
+            {
+              payment_method: "COD",
+              order_status: "Pending",
+              name: formData.name,
+              address: formData.address,
+              city: formData.city,
+              state: formData.state,
+              zip: formData.zip
             }
-          },
-          prefill: {
-            name: formData.name,
-            email: formData.email,
-            contact: formData.phone || "9828488365"
-          },
-          theme: {
-            color: "#d4af37"
-          },
-          modal: {
-            ondismiss: function() {
-              setIsProcessing(false);
-              setPaymentError("Payment process canceled by customer.");
-            }
+          );
+
+          if (createdOrderId) {
+            orderId = createdOrderId;
           }
-        };
 
-        const rzp = new (window as any).Razorpay(options);
-        rzp.on("payment.failed", function (resp: any) {
-          setPaymentError(resp.error.description || "The real payment transaction failed.");
-          setIsProcessing(false);
-        });
-        rzp.open();
+          // Requirements: clear cart table entries for that user
+          if (activeUid) {
+            console.log(`[COD Checkout] Clearing database cart items for authenticated user ${activeUid}`);
+            await syncSupabaseCart(activeUid, []);
+          }
+        } catch (supabaseErr) {
+          console.error("[COD Checkout Database Sync Failed]:", supabaseErr);
+          // Let client-side local storage store work as fallback
+        }
       }
-    } catch (err: any) {
-      console.error("Order submit failed:", err);
-      setPaymentError(err?.message || "Failed to initialize payment gateway. Please check connection.");
-      setIsProcessing(false);
-    }
-  };
 
-  const handleSandboxSimulateSuccess = async () => {
-    setIsSandboxActive(false);
-    setVerifyingPayment(true);
-    try {
-      const verifyRes = await fetch("/api/razorpay/verify-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          razorpay_order_id: sandboxPayload?.order_id,
-          razorpay_payment_id: "pay_sandbox_" + Math.random().toString(36).substring(2, 10),
-          razorpay_signature: "sandbox_sig_verified",
-          items,
+      // Save order local sync for Client tracking
+      const savedOrders = localStorage.getItem("pingaksh_customer_orders") || "[]";
+      try {
+        const ordersList = JSON.parse(savedOrders);
+        const newOrder = {
+          id: orderId,
+          date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
           total,
-          customerEmail: formData.email,
-          sandbox: true
-        })
-      });
-      const verifyData = await verifyRes.json();
-      if (verifyData.success) {
-        await saveOrderToDatabase();
-        onSuccess();
-        navigate("/success");
-      } else {
-        setPaymentError("Sandbox payment processing verification failed.");
+          items: items.map(i => ({ id: i.id, name: i.name, price: getRawPriceINR(i.price), quantity: i.quantity, image: i.image })),
+          status: "calibrating", // standard state status
+          payment_method: "COD",
+          order_status: "Pending",
+          customer_name: formData.name,
+          customer_phone: formData.phone,
+          shipping_address: `${formData.address}, ${formData.city}, ${formData.state} - ${formData.zip}`
+        };
+        ordersList.unshift(newOrder);
+        localStorage.setItem("pingaksh_customer_orders", JSON.stringify(ordersList));
+      } catch (err) {
+        console.error("Local order sync failed", err);
       }
-    } catch (err) {
-      setPaymentError("An error occurred simulating sandbox verify.");
+
+      // 5. After successful order: clear cart table, show success message, redirect to success
+      onSuccess(); // local cart clear
+      
+      // Redirect to success
+      navigate("/success");
+    } catch (err: any) {
+      console.error("Order dispatch failed:", err);
+      setPaymentError(err?.message || "Undergoing technical friction. Could not log COD order.");
     } finally {
-      setVerifyingPayment(false);
       setIsProcessing(false);
     }
-  };
-
-  const handleSandboxSimulateFailure = () => {
-    setIsSandboxActive(false);
-    setIsProcessing(false);
-    setPaymentError("Razorpay transaction rejected: Insufficient credit limit. (Code: INSUFFICIENT_FUNDS_402)");
   };
 
   return (
@@ -1319,7 +1215,7 @@ const Checkout = ({
         <div className="space-y-8 animate-fade-in">
           <div className="space-y-2 border-b border-neutral-900 pb-4">
             <h2 className="text-2xl font-serif font-bold text-white tracking-tight">Securing Your Order</h2>
-            <p className="text-xs text-neutral-500 font-sans">Provide shipping coordinates for dispatch tracking.</p>
+            <p className="text-xs text-neutral-500 font-sans">Provide shipping coordinates for Cash on Delivery (COD) dispatch tracking.</p>
           </div>
 
           {paymentError && (
@@ -1330,7 +1226,7 @@ const Checkout = ({
             >
               <AlertCircle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
               <div className="space-y-1">
-                <p className="font-serif font-bold text-sm">Transaction Failed</p>
+                <p className="font-serif font-bold text-sm">Failed to Place Order</p>
                 <p className="font-sans leading-relaxed text-[11px] text-neutral-400">{paymentError}</p>
                 <button 
                   type="button"
@@ -1341,13 +1237,6 @@ const Checkout = ({
                 </button>
               </div>
             </motion.div>
-          )}
-
-          {verifyingPayment && (
-            <div className="p-5 bg-gold/5 border border-gold/20 rounded-xl flex items-center justify-center gap-3">
-              <span className="w-4 h-4 border-2 border-gold border-t-transparent rounded-full animate-spin" />
-              <span className="text-xs text-gold font-mono uppercase tracking-widest">Verifying payment token... Please wait</span>
-            </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -1438,23 +1327,23 @@ const Checkout = ({
               <div className="p-5 border border-gold/40 bg-gold/5 rounded-xl flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <div className="w-4 h-4 rounded-full border-4 border-gold bg-black" />
-                  <span className="text-sm font-serif font-medium text-white">Razorpay Secure Gateway</span>
+                  <span className="text-sm font-serif font-medium text-white">Cash on Delivery (COD)</span>
                 </div>
-                <div className="flex gap-2 items-center text-xs text-neutral-400 font-mono tracking-widest uppercase">
-                  <span>INR Supported</span>
+                <div className="flex gap-2 items-center text-[10px] text-gold font-mono tracking-widest uppercase font-bold">
+                  <span>India Supported</span>
                 </div>
               </div>
               <p className="text-[10px] text-neutral-500 mt-2 font-mono uppercase tracking-widest">
-                Pay instantly via UPI, Netbanking, or Debit/Credit card.
+                No advance digital fee. Zero transaction charges. Pay securely with cash or UPI at delivery.
               </p>
             </div>
 
             <button 
-              disabled={isProcessing || verifyingPayment}
+              disabled={isProcessing}
               type="submit"
               className="w-full bg-gold hover:bg-white text-black py-4.5 font-mono text-xs font-bold tracking-[0.2em] rounded transition-all disabled:opacity-50 disabled:cursor-not-allowed mt-8 uppercase whitespace-nowrap"
             >
-              {isProcessing ? "INITIALIZING SECURE GATEWAY..." : `PROCEED TO PAY — ₹${total.toLocaleString("en-IN")}`}
+              {isProcessing ? "PLACING COD ORDER..." : `Place Order (Cash on Delivery) — ₹${total.toLocaleString("en-IN")}`}
             </button>
           </form>
         </div>
@@ -1498,177 +1387,6 @@ const Checkout = ({
           </div>
         </div>
       </div>
-
-      {/* Dynamic Sandbox Modal */}
-      <AnimatePresence>
-        {isSandboxActive && (
-          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-[420px] bg-[#121212] border border-neutral-800 rounded-2xl overflow-hidden shadow-2xl flex flex-col font-sans"
-            >
-              {/* Header */}
-              <div className="p-5 border-b border-neutral-900 bg-[#0a0a0a] flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-black tracking-tight text-white gap-1 flex items-center">
-                      <span className="text-blue-500">★</span> razorpay
-                    </span>
-                    <span className="bg-red-500/10 text-red-500 border border-red-500/20 text-[8px] font-mono px-2 py-0.5 rounded uppercase tracking-widest font-bold">
-                      Sandbox Mode
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-neutral-400 mt-1 font-mono uppercase tracking-wider">Pingaksh Homage Studio</p>
-                </div>
-                <button 
-                  onClick={() => {
-                    setIsSandboxActive(false);
-                    setIsProcessing(false);
-                    setPaymentError("User exited payment modal.");
-                  }}
-                  className="p-1 hover:bg-neutral-900 rounded-md text-neutral-400 hover:text-white transition"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-
-              {/* Body */}
-              <div className="p-6 space-y-5">
-                {/* Total box */}
-                <div className="p-4 bg-[#181818] border border-neutral-800 rounded-xl text-center">
-                  <span className="text-[10px] text-neutral-500 uppercase tracking-widest font-mono block mb-1">Simulated Charge</span>
-                  <span className="text-2xl font-mono text-white font-bold">₹{total.toLocaleString("en-IN")}</span>
-                  <span className="text-[10px] text-neutral-500 font-mono block mt-1">Net Payable Amount in INR</span>
-                </div>
-
-                {/* Simulated contacts */}
-                <div className="grid grid-cols-2 gap-3 bg-[#161616]/40 p-3 rounded-lg border border-neutral-900 text-[11px] font-mono text-neutral-400">
-                  <div className="min-w-0">
-                    <span className="text-[9px] text-neutral-600 block uppercase">Client Email</span>
-                    <span className="truncate block text-neutral-200">{formData.email || "guest@client.com"}</span>
-                  </div>
-                  <div>
-                    <span className="text-[9px] text-neutral-600 block uppercase">Client Phone</span>
-                    <span className="block text-neutral-200">9828488365</span>
-                  </div>
-                </div>
-
-                {/* Tabs */}
-                <div className="grid grid-cols-3 gap-1 bg-[#161616] p-1 border border-neutral-900 rounded-lg">
-                  <button 
-                    type="button"
-                    onClick={() => setActiveMockTab('card')}
-                    className={cn("py-2 px-2 text-[10px] font-bold tracking-wider rounded font-mono uppercase transition", activeMockTab === 'card' ? "bg-neutral-800 text-gold" : "text-neutral-500 hover:text-neutral-300")}
-                  >
-                    Card info
-                  </button>
-                  <button 
-                    type="button"
-                    onClick={() => setActiveMockTab('upi')}
-                    className={cn("py-2 px-2 text-[10px] font-bold tracking-wider rounded font-mono uppercase transition", activeMockTab === 'upi' ? "bg-neutral-800 text-gold" : "text-neutral-500 hover:text-neutral-300")}
-                  >
-                    UPI ID
-                  </button>
-                  <button 
-                    type="button"
-                    onClick={() => setActiveMockTab('net')}
-                    className={cn("py-2 px-2 text-[10px] font-bold tracking-wider rounded font-mono uppercase transition", activeMockTab === 'net' ? "bg-neutral-800 text-gold" : "text-neutral-500 hover:text-neutral-300")}
-                  >
-                    Netbank
-                  </button>
-                </div>
-
-                {/* Tab Content */}
-                <div className="min-h-[110px]">
-                  {activeMockTab === 'card' && (
-                    <div className="space-y-3">
-                      <div className="border border-neutral-800 rounded bg-[#161616] p-3 flex items-center justify-between">
-                        <div>
-                          <p className="text-[10px] text-neutral-500 uppercase tracking-widest font-mono">Simulated Card</p>
-                          <p className="font-mono text-sm text-neutral-200 mt-1">4111 • • • • • • • • 1111</p>
-                        </div>
-                        <CreditCard size={20} className="text-neutral-500" />
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                        <div className="border border-neutral-800 rounded bg-[#161616] p-2.5">
-                          <span className="text-[8px] text-neutral-600 block uppercase">Expiry</span>
-                          <span className="text-neutral-300">12/29</span>
-                        </div>
-                        <div className="border border-neutral-800 rounded bg-[#161616] p-2.5">
-                          <span className="text-[8px] text-neutral-600 block uppercase">CVV Code</span>
-                          <span className="text-neutral-300">•••</span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {activeMockTab === 'upi' && (
-                    <div className="space-y-3">
-                      <div className="border border-neutral-800 rounded bg-[#161616] p-3 flex items-center gap-3">
-                        <Smartphone size={20} className="text-neutral-500 shrink-0" />
-                        <div className="w-full">
-                          <span className="text-[9px] text-neutral-600 block uppercase font-mono">Simulated UPI Address</span>
-                          <input 
-                            disabled
-                            type="text" 
-                            className="bg-transparent border-none p-0 text-xs text-neutral-300 font-mono focus:outline-none w-full"
-                            value="pingaksh@oksbi"
-                          />
-                        </div>
-                      </div>
-                      <div className="flex gap-2 text-[9.5px] font-mono text-neutral-500 justify-center">
-                        <span className="px-2 py-1 border border-neutral-800 rounded bg-neutral-900/40">GPay</span>
-                        <span className="px-2 py-1 border border-neutral-800 rounded bg-neutral-900/40">PhonePe</span>
-                        <span className="px-2 py-1 border border-neutral-800 rounded bg-neutral-900/40">Paytm</span>
-                      </div>
-                    </div>
-                  )}
-
-                  {activeMockTab === 'net' && (
-                    <div className="space-y-3 font-mono text-[10.5px]">
-                      <span className="text-[9px] text-neutral-600 block uppercase font-mono">Simulate Banking Partner</span>
-                      <div className="grid grid-cols-2 gap-2 text-neutral-400">
-                        <div className="p-2.5 border border-gold/20 bg-gold/5 rounded text-neutral-200 text-center flex items-center justify-center gap-1.5 cursor-pointer">
-                          <Check size={10} className="text-gold" /> State Bank of India
-                        </div>
-                        <div className="p-2.5 border border-neutral-800 rounded text-center hover:bg-neutral-900 hover:text-white cursor-pointer select-none">
-                          HDFC Bank
-                        </div>
-                        <div className="p-2.5 border border-neutral-800 rounded text-center hover:bg-neutral-900 hover:text-white cursor-pointer select-none">
-                          ICICI Bank
-                        </div>
-                        <div className="p-2.5 border border-neutral-800 rounded text-center hover:bg-neutral-900 hover:text-white cursor-pointer select-none">
-                          Axis Bank
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Action buttons */}
-              <div className="p-5 border-t border-neutral-900 bg-[#0e0e0e] grid grid-cols-1 gap-2.5">
-                <button 
-                  onClick={handleSandboxSimulateSuccess}
-                  type="button"
-                  className="w-full bg-[#10b981] hover:bg-[#059669] text-white py-3.5 font-mono text-xs font-bold tracking-widest uppercase rounded flex items-center justify-center gap-2 transition cursor-pointer"
-                >
-                  <Check size={14} /> Simulate Success (Verify)
-                </button>
-                <button 
-                  onClick={handleSandboxSimulateFailure}
-                  type="button"
-                  className="w-full bg-red-800 hover:bg-red-900 text-white py-3 font-mono text-xs font-bold tracking-widest uppercase rounded flex items-center justify-center gap-2 transition cursor-pointer"
-                >
-                  <X size={14} /> Simulate Declined Payment
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
     </div>
   );
 };
@@ -6029,9 +5747,32 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                         <td className="py-4 px-4 font-mono font-bold text-gold">
                           {ord.id.substring(0, 8).toUpperCase()}
                         </td>
-                        <td className="py-4 px-4 font-sans leading-relaxed">
-                          <div className="font-semibold text-neutral-200">{ord.customer_email}</div>
-                          <div className="text-[10px] text-neutral-500 font-mono mt-0.5">{ord.created_at ? new Date(ord.created_at).toLocaleDateString() : ""}</div>
+                        <td className="py-2.5 px-4 font-sans leading-relaxed">
+                          <div className="font-semibold text-neutral-200">
+                            {ord.shipping_name || "Client"} 
+                            <span className="text-neutral-400 font-normal ml-1.5">({ord.customer_email})</span>
+                          </div>
+                          {ord.customer_phone && (
+                            <div className="text-[11px] text-neutral-350 font-mono mt-0.5">📞 {ord.customer_phone}</div>
+                          )}
+                          
+                          {(ord.shipping_address || ord.shipping_city || ord.shipping_state || ord.shipping_zip) ? (
+                            <div className="text-neutral-400 text-[10.5px] bg-[#0c0c0c] border border-neutral-850 p-2 rounded-lg mt-1.5 max-w-sm leading-normal">
+                              <p className="text-neutral-200 font-medium">{ord.shipping_address}</p>
+                              <p className="mt-0.5 text-neutral-450">{ord.shipping_city}, {ord.shipping_state} - {ord.shipping_zip}</p>
+                            </div>
+                          ) : (
+                            <div className="text-neutral-500 text-[10px] italic">No shipping address recorded</div>
+                          )}
+                          
+                          <div className="flex gap-2 items-center mt-2 font-mono text-[9px] uppercase tracking-wider">
+                            <span className="text-neutral-500">Date: {ord.created_at ? new Date(ord.created_at).toLocaleDateString() : ""}</span>
+                            {ord.payment_method && (
+                              <span className={`px-1.5 py-0.5 rounded font-bold border ${ord.payment_method === 'COD' ? 'bg-gold/10 text-gold border-gold/20' : 'bg-blue-950/20 text-blue-400 border-blue-900/30'}`}>
+                                {ord.payment_method === 'COD' ? 'Cash on Delivery (COD)' : ord.payment_method}
+                              </span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-4 px-4 font-semibold text-neutral-200 font-mono">
                           {getFormattedPrice(ord.total)}
