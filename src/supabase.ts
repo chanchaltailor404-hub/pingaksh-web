@@ -4,8 +4,21 @@ import { createClient } from "@supabase/supabase-js";
 const env = (import.meta as any).env || {};
 const procEnv = (typeof process !== "undefined" ? process.env : {}) as any;
 
-const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || procEnv.NEXT_PUBLIC_SUPABASE_URL || env.VITE_SUPABASE_URL || procEnv.VITE_SUPABASE_URL;
-const supabaseAnonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY || procEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || procEnv.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = 
+  env.NEXT_PUBLIC_SUPABASE_URL || 
+  procEnv.NEXT_PUBLIC_SUPABASE_URL || 
+  env.VITE_SUPABASE_URL || 
+  procEnv.VITE_SUPABASE_URL ||
+  env.SUPABASE_URL ||
+  procEnv.SUPABASE_URL;
+
+const supabaseAnonKey = 
+  env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
+  procEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
+  env.VITE_SUPABASE_ANON_KEY || 
+  procEnv.VITE_SUPABASE_ANON_KEY ||
+  env.SUPABASE_ANON_KEY ||
+  procEnv.SUPABASE_ANON_KEY;
 
 // Verify if credentials have been configured
 export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey);
@@ -998,52 +1011,64 @@ export const getSupabaseAllProfiles = async (): Promise<SupabaseProfile[]> => {
 export const getSupabaseAllWishlists = async (): Promise<any[]> => {
   if (!supabase) return [];
   try {
-    let data: any[] = [];
-    let error: any = null;
+    let finalData: any[] = [];
+    let successCount = 0;
+    const errors: any[] = [];
 
-    // Try 'wishlist' table first
-    const res1 = await supabase.from("wishlist").select("*");
-    if (!res1.error) {
-      data = res1.data || [];
-    } else {
-      error = res1.error;
-    }
+    console.log("[Supabase Admin Analytics Debug] Starting parallel fetch for admin wishlist records...");
 
-    // Try 'wishlists' table fallback if we got an undefined_table error (42P01) or table missing error
-    if (res1.error && (res1.error.code === "42P01" || res1.error.message?.includes("does not exist"))) {
-      const res2 = await supabase.from("wishlists").select("*");
-      if (!res2.error) {
-        data = res2.data || [];
-        error = null;
+    // Try 'wishlist' (singular) table
+    try {
+      const { data, error } = await supabase.from("wishlist").select("*");
+      if (error) {
+        errors.push({ table: "wishlist", code: error.code, message: error.message });
+        console.warn("[Supabase Admin Analytics Debug] Failed querying 'wishlist' (singular) table:", error);
       } else {
-        error = res2.error;
+        successCount++;
+        console.log(`[Supabase Admin Analytics Debug] 'wishlist' (singular) query succeeded. Rows found: ${data?.length || 0}`);
+        const list = data || [];
+        for (const item of list) {
+          finalData.push(item);
+        }
       }
+    } catch (e: any) {
+      errors.push({ table: "wishlist", exception: e?.message || e });
+      console.error("[Supabase Admin Analytics Debug] Exception on 'wishlist' query:", e);
     }
 
-    // Secondary union check: what if both tables exist and contain records? Let's check both
-    if (!res1.error) {
-      const res2 = await supabase.from("wishlists").select("*");
-      if (!res2.error && res2.data && res2.data.length > 0) {
-        const existingKeys = new Set(data.map(item => `${item.user_id}-${item.product_id}`));
-        for (const item of res2.data) {
+    // Try 'wishlists' (plural) table
+    try {
+      const { data, error } = await supabase.from("wishlists").select("*");
+      if (error) {
+        errors.push({ table: "wishlists", code: error.code, message: error.message });
+        console.warn("[Supabase Admin Analytics Debug] Failed querying 'wishlists' (plural) table:", error);
+      } else {
+        successCount++;
+        console.log(`[Supabase Admin Analytics Debug] 'wishlists' (plural) query succeeded. Rows found: ${data?.length || 0}`);
+        const existingKeys = new Set(finalData.map(item => `${item.user_id}-${item.product_id}`));
+        const list = data || [];
+        for (const item of list) {
           const key = `${item.user_id}-${item.product_id}`;
           if (!existingKeys.has(key)) {
-            data.push(item);
+            finalData.push(item);
             existingKeys.add(key);
           }
         }
       }
+    } catch (e: any) {
+      errors.push({ table: "wishlists", exception: e?.message || e });
+      console.error("[Supabase Admin Analytics Debug] Exception on 'wishlists' query:", e);
     }
 
-    if (error) {
-      console.error("[Supabase Admin Wishlists] Error retrieving from wishlist tables:", error);
+    if (successCount === 0) {
+      console.error("[Supabase Admin Analytics Debug] BOTH wishlist tables failed to resolve. Error log details:", errors);
       return [];
     }
-    
-    console.log(`[Supabase Admin Wishlists] Successfully retrieved ${data.length} wishlists records`);
-    return data || [];
+
+    console.log(`[Supabase Admin Wishlists] Successfully finished. Registered total size: ${finalData.length} records across successfully resolved table(s).`);
+    return finalData;
   } catch (err) {
-    console.error("[Supabase Admin Wishlists Exception] getSupabaseAllWishlists:", err);
+    console.error("[Supabase Admin Wishlists Exception] getSupabaseAllWishlists failed completely:", err);
     return [];
   }
 };
@@ -1052,52 +1077,64 @@ export const getSupabaseAllWishlists = async (): Promise<any[]> => {
 export const getSupabaseAllCartItems = async (): Promise<any[]> => {
   if (!supabase) return [];
   try {
-    let data: any[] = [];
-    let error: any = null;
+    let finalData: any[] = [];
+    let successCount = 0;
+    const errors: any[] = [];
 
-    // Try 'cart_items' first (modern schema default)
-    const res1 = await supabase.from("cart_items").select("*");
-    if (!res1.error) {
-      data = res1.data || [];
-    } else {
-      error = res1.error;
-    }
+    console.log("[Supabase Admin Analytics Debug] Starting parallel fetch for admin cart records...");
 
-    // Try 'cart' fallback table if undefined_table error
-    if (res1.error && (res1.error.code === "42P01" || res1.error.message?.includes("does not exist"))) {
-      const res2 = await supabase.from("cart").select("*");
-      if (!res2.error) {
-        data = res2.data || [];
-        error = null;
+    // Try 'cart_items' (plural default) table
+    try {
+      const { data, error } = await supabase.from("cart_items").select("*");
+      if (error) {
+        errors.push({ table: "cart_items", code: error.code, message: error.message });
+        console.warn("[Supabase Admin Analytics Debug] Failed querying 'cart_items' table:", error);
       } else {
-        error = res2.error;
+        successCount++;
+        console.log(`[Supabase Admin Analytics Debug] 'cart_items' query succeeded. Rows found: ${data?.length || 0}`);
+        const list = data || [];
+        for (const item of list) {
+          finalData.push(item);
+        }
       }
+    } catch (e: any) {
+      errors.push({ table: "cart_items", exception: e?.message || e });
+      console.error("[Supabase Admin Analytics Debug] Exception on 'cart_items' query:", e);
     }
 
-    // Secondary union check: merge results if both tables have data
-    if (!res1.error) {
-      const res2 = await supabase.from("cart").select("*");
-      if (!res2.error && res2.data && res2.data.length > 0) {
-        const existingKeys = new Set(data.map(item => `${item.user_id}-${item.product_id}`));
-        for (const item of res2.data) {
+    // Try 'cart' (singular) table
+    try {
+      const { data, error } = await supabase.from("cart").select("*");
+      if (error) {
+        errors.push({ table: "cart", code: error.code, message: error.message });
+        console.warn("[Supabase Admin Analytics Debug] Failed querying 'cart' table:", error);
+      } else {
+        successCount++;
+        console.log(`[Supabase Admin Analytics Debug] 'cart' query succeeded. Rows found: ${data?.length || 0}`);
+        const existingKeys = new Set(finalData.map(item => `${item.user_id}-${item.product_id}`));
+        const list = data || [];
+        for (const item of list) {
           const key = `${item.user_id}-${item.product_id}`;
           if (!existingKeys.has(key)) {
-            data.push(item);
+            finalData.push(item);
             existingKeys.add(key);
           }
         }
       }
+    } catch (e: any) {
+      errors.push({ table: "cart", exception: e?.message || e });
+      console.error("[Supabase Admin Analytics Debug] Exception on 'cart' query:", e);
     }
 
-    if (error) {
-      console.error("[Supabase Admin Carts] Error retrieving from cart tables:", error);
+    if (successCount === 0) {
+      console.error("[Supabase Admin Analytics Debug] BOTH cart tables failed to resolve. Error log details:", errors);
       return [];
     }
 
-    console.log(`[Supabase Admin Carts] Successfully retrieved ${data.length} cart records`);
-    return data || [];
+    console.log(`[Supabase Admin Carts] Successfully finished. Registered total size: ${finalData.length} records across successfully resolved table(s).`);
+    return finalData;
   } catch (err) {
-    console.error("[Supabase Admin Carts Exception] getSupabaseAllCartItems:", err);
+    console.error("[Supabase Admin Carts Exception] getSupabaseAllCartItems failed completely:", err);
     return [];
   }
 };

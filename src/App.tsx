@@ -6176,8 +6176,10 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                   </thead>
                   <tbody className="divide-y divide-neutral-900/40 font-sans">
                     {wishlists.map((wish: any, idx: number) => {
+                      const wishUserId = wish.user_id ? String(wish.user_id) : "";
+                      const wishPropId = wish.product_id ? String(wish.product_id) : "";
                       const profile = profiles.find(p => p.id === wish.user_id);
-                      const email = profile?.email || "Guest (" + wish.user_id.substring(0, 6) + ")";
+                      const email = profile?.email || "Guest (" + (wishUserId ? wishUserId.substring(0, 6) : "Anon") + ")";
                       const name = profile?.name || "Anonymous User";
                       const matchWatch = watches.find(w => w.id === wish.product_id);
                       const watchName = matchWatch?.name || "Premium Chronograph";
@@ -6202,7 +6204,7 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                             <span className="font-serif font-bold text-white text-xs">{watchName}</span>
                           </td>
                           <td className="py-4 px-6 font-mono text-neutral-400 text-[11px]">
-                            {wish.product_id.substring(0, 8).toUpperCase()}...
+                            {wishPropId ? wishPropId.substring(0, 8).toUpperCase() : "N/A"}...
                           </td>
                           <td className="py-4 px-6 text-neutral-400 font-mono text-[10px]">
                             {wish.created_at ? new Date(wish.created_at).toLocaleDateString() : "Undated"}
@@ -6251,8 +6253,9 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                   </thead>
                   <tbody className="divide-y divide-neutral-900/40 font-sans">
                     {carts.map((cartItem: any, idx: number) => {
+                      const cartUserId = cartItem.user_id ? String(cartItem.user_id) : "";
                       const profile = profiles.find(p => p.id === cartItem.user_id);
-                      const email = profile?.email || "Guest (" + cartItem.user_id.substring(0, 6) + ")";
+                      const email = profile?.email || "Guest (" + (cartUserId ? cartUserId.substring(0, 6) : "Anon") + ")";
                       const name = profile?.name || "Anonymous User";
                       const matchWatch = watches.find(w => w.id === cartItem.product_id);
                       const watchName = matchWatch?.name || "Premium Chronograph";
