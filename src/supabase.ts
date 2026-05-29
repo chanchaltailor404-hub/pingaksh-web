@@ -539,13 +539,22 @@ export const getSupabaseOrders = async (userId: string): Promise<SupabaseOrder[]
 
 // 6. Admin Dashboard Retrieve All Database Dispatches
 export const getSupabaseAllOrders = async (): Promise<SupabaseOrder[]> => {
-  if (!supabase) return [];
+  if (!supabase) {
+    console.warn("[Supabase Admin Orders] Supabase not configured.");
+    return [];
+  }
   try {
-    console.log("[Supabase Admin Orders] Fetching all orders without join...");
+    console.log("[Supabase Admin Orders] Fetching raw orders directly using select('*')...");
+    
+    // Fetch raw orders directly from the 'orders' table without incorrect filters, joins, or coordinate matching logic
     const { data: orders, error: ordersError } = await supabase
       .from("orders")
-      .select("*")
-      .order("created_at", { ascending: false });
+      .select("*");
+
+    // Add console logs matching Requirements:
+    console.log("fetched orders:", orders);
+    console.log("order count:", orders ? orders.length : 0);
+    console.log("query errors:", ordersError);
 
     if (ordersError) {
       console.error("[Supabase Admin Orders] Error retrieving all orders from Supabase:", ordersError);
@@ -556,21 +565,42 @@ export const getSupabaseAllOrders = async (): Promise<SupabaseOrder[]> => {
       return [];
     }
 
-    const orderIds = orders.map((o: any) => o.id);
-    console.log(`[Supabase Admin Orders] Found ${orders.length} orders. Fetching related items...`);
-    const { data: items, error: itemsError } = await supabase
-      .from("order_items")
-      .select("*")
-      .in("order_id", orderIds);
+    // Sort the orders inside JS to ensure chronological display and production Vercel compatibility
+    const sortedOrders = [...orders].sort((a: any, b: any) => {
+      const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return dateB - dateA;
+    });
 
-    if (itemsError) {
-      console.warn("[Supabase Admin Orders] Failed to query related order_items table:", itemsError);
+    // Fetch related items separately to avoid broken joins if any
+    const orderIds = sortedOrders.map((o: any) => o.id);
+    console.log(`[Supabase Admin Orders] Fetching related items for ${sortedOrders.length} orders...`);
+    
+    try {
+      const { data: items, error: itemsError } = await supabase
+        .from("order_items")
+        .select("*")
+        .in("order_id", orderIds);
+
+      if (itemsError) {
+        console.warn("[Supabase Admin Orders] Failed to query related order_items: ", itemsError);
+        return sortedOrders.map((order: any) => ({
+          ...order,
+          order_items: []
+        }));
+      }
+
+      return sortedOrders.map((order: any) => ({
+        ...order,
+        order_items: (items || []).filter((item: any) => item.order_id === order.id)
+      }));
+    } catch (innerErr) {
+      console.error("[Supabase Admin Orders] Inner exception querying related items:", innerErr);
+      return sortedOrders.map((order: any) => ({
+        ...order,
+        order_items: []
+      }));
     }
-
-    return orders.map((order: any) => ({
-      ...order,
-      order_items: (items || []).filter((item: any) => item.order_id === order.id)
-    }));
   } catch (err) {
     console.error("[Supabase Admin Orders Exception] getSupabaseAllOrders:", err);
     return [];
