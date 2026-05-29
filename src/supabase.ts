@@ -77,6 +77,13 @@ export interface SupabaseOrder {
   customer_phone: string | null;
   total: number;
   status: "calibrating" | "transit" | "customs" | "fulfilled" | "cancelled";
+  order_status?: string;
+  shipping_name?: string;
+  shipping_address?: string;
+  shipping_city?: string;
+  shipping_state?: string;
+  shipping_zip?: string;
+  payment_method?: string;
   created_at?: string;
   order_items?: {
     id: string;
@@ -573,35 +580,70 @@ export const getSupabaseAllOrders = async (): Promise<SupabaseOrder[]> => {
 // 7. Update Order Status
 export const updateSupabaseOrderStatus = async (
   orderId: string,
-  status: SupabaseOrder["status"]
+  statusInput: string
 ) => {
   if (!supabase) return;
   try {
-    console.log(`[Supabase Admin Status] Setting status for order ${orderId} to: ${status}`);
+    console.log(`[Supabase Admin Status] Input status change request for ${orderId}: "${statusInput}"`);
     
-    // Attempt full update first - both status (controlled in db constraint) and order_status
+    // Perform robust mapping of tracking status to status column value (subject to check constraint)
+    // and order_status column string
+    let statusCol: "calibrating" | "transit" | "customs" | "fulfilled" | "cancelled" = "calibrating";
+    let orderStatusStr = "Pending";
+
+    const normalized = statusInput.trim().toLowerCase();
+    switch (normalized) {
+      case "pending":
+        statusCol = "calibrating";
+        orderStatusStr = "Pending";
+        break;
+      case "processing":
+        statusCol = "calibrating";
+        orderStatusStr = "Processing";
+        break;
+      case "shipped":
+      case "transit":
+        statusCol = "transit";
+        orderStatusStr = "Shipped";
+        break;
+      case "out for delivery":
+      case "customs":
+        statusCol = "customs";
+        orderStatusStr = "Out for Delivery";
+        break;
+      case "delivered":
+      case "fulfilled":
+        statusCol = "fulfilled";
+        orderStatusStr = "Delivered";
+        break;
+      case "cancelled":
+        statusCol = "cancelled";
+        orderStatusStr = "Cancelled";
+        break;
+      default:
+        // Default fallbacks for direct inputs
+        if (normalized === "calibrating") {
+          statusCol = "calibrating";
+          orderStatusStr = "Processing";
+        } else {
+          statusCol = "calibrating";
+          orderStatusStr = statusInput;
+        }
+        break;
+    }
+
+    console.log(`[Supabase Admin Status] Resulting update values - status: "${statusCol}", order_status: "${orderStatusStr}"`);
+
+    // Perform database update
     const { error } = await supabase
       .from("orders")
       .update({ 
-        status,
-        order_status: status === "fulfilled" ? "Fulfilled" : status === "cancelled" ? "Cancelled" : "Processed"
+        status: statusCol,
+        order_status: orderStatusStr
       })
       .eq("id", orderId);
 
     if (error) {
-      const isMissingColumn = error.message?.includes("column") || error.code === "42703";
-      if (isMissingColumn) {
-        console.warn("[Supabase Admin Status Fallback] Custom order_status column missing. Retrying baseline status update.");
-        const { error: fallbackError } = await supabase
-          .from("orders")
-          .update({ status })
-          .eq("id", orderId);
-
-        if (fallbackError) {
-          throw fallbackError;
-        }
-        return;
-      }
       console.error("[Supabase Admin Status] Update order status failed:", error);
       throw error;
     }

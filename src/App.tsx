@@ -3269,14 +3269,21 @@ const ProfilePage = ({
 
   // Retrieve customer orders dynamically support Supabase or localStorage fallback
   const [customerOrders, setCustomerOrders] = useState<any[]>([]);
+  const [isOrdersLoading, setIsOrdersLoading] = useState(false);
+  const [ordersFetchError, setOrdersFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!user?.uid) return;
-    if (isSupabaseConfigured && supabase && user?.uid) {
-      getSupabaseOrders(user.uid)
-        .then((dbOrders) => {
+
+    const loadOrders = async () => {
+      setIsOrdersLoading(true);
+      setOrdersFetchError(null);
+      try {
+        if (isSupabaseConfigured && supabase) {
+          const dbOrders = await getSupabaseOrders(user.uid);
           const formatted = dbOrders.map(ord => ({
             id: ord.id.substring(0, 8).toUpperCase(),
+            fullId: ord.id,
             date: ord.created_at ? new Date(ord.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "",
             total: Number(ord.total),
             items: ord.order_items?.map(it => ({
@@ -3286,21 +3293,51 @@ const ProfilePage = ({
               quantity: it.quantity,
               image: (watches.length > 0 ? watches : WATCHES).find(w => w.name === it.product_name)?.image || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800"
             })) || [],
-            status: ord.status
+            status: ord.status,
+            order_status: ord.order_status,
+            payment_method: ord.payment_method,
+            shipping_name: ord.shipping_name,
+            shipping_address: ord.shipping_address,
+            shipping_city: ord.shipping_city,
+            shipping_state: ord.shipping_state,
+            shipping_zip: ord.shipping_zip,
+            customer_phone: ord.customer_phone,
+            customer_email: ord.customer_email,
+            created_at: ord.created_at
           }));
           setCustomerOrders(formatted);
-        })
-        .catch(err => {
-          console.error("Error loading Supabase user orders:", err);
-          setCustomerOrders([]);
-        });
-    } else {
-      try {
-        const saved = localStorage.getItem("pingaksh_customer_orders");
-        setCustomerOrders(saved ? JSON.parse(saved) : []);
-      } catch {
-        setCustomerOrders([]);
+        } else {
+          const saved = localStorage.getItem("pingaksh_customer_orders");
+          setCustomerOrders(saved ? JSON.parse(saved) : []);
+        }
+      } catch (err: any) {
+        console.error("Error loading user orders:", err);
+        setOrdersFetchError(err?.message || "Secure synchronization link failed. Please refresh.");
+      } finally {
+        setIsOrdersLoading(false);
       }
+    };
+
+    loadOrders();
+
+    // Set up high-fidelity instant replication listener for live status updates
+    if (isSupabaseConfigured && supabase) {
+      console.log(`[Realtime Channel] Subscribing to instant changes on orders for current client: ${user.uid}`);
+      const userOrdersChannel = supabase
+        .channel(`user-instant-orders-${user.uid}`)
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "orders", filter: `user_id=eq.${user.uid}` },
+          (payload) => {
+            console.log("[Realtime Channel] Live update event intercepted successfully. Refreshing customer orders.", payload);
+            loadOrders();
+          }
+        )
+        .subscribe();
+
+      return () => {
+        userOrdersChannel.unsubscribe();
+      };
     }
   }, [user?.uid, watches]);
 
@@ -3468,180 +3505,323 @@ const ProfilePage = ({
           {/* Active Logistics Shipping timeline tracker */}
           <div className="space-y-6">
             <div className="space-y-1.5">
-              <span className="text-gold text-[9px] font-mono tracking-[0.25em] font-bold block uppercase">INDIAN REGIONAL SHIPPING LINES</span>
-              <h3 className="text-2xl font-serif font-bold text-white tracking-snug">Active Domestic Logistics Tracking</h3>
-              <p className="text-neutral-500 text-xs text-light">Meticulously tracking your high-weight horological payload inside Indian state coordinates.</p>
+              <span className="text-gold text-[9px] font-mono tracking-[0.25em] font-bold block uppercase">PINGAKSH SECURE REGISTRY</span>
+              <h3 className="text-2xl font-serif font-bold text-white tracking-snug">My Orders & Live Logistics Tracking</h3>
+              <p className="text-neutral-500 text-xs text-light">Meticulously tracking your high-weight horological acquisitions in real-time with Indian domestic lines.</p>
             </div>
 
-            {customerOrders.length === 0 ? (
+            {isOrdersLoading ? (
+              <div className="space-y-6 py-6 animate-pulse">
+                <div className="h-6 bg-neutral-900 rounded-lg w-1/4" />
+                <div className="p-8 border border-neutral-900 rounded-2xl bg-neutral-950/40 space-y-4">
+                  <div className="h-4 bg-neutral-900 rounded w-1/3" />
+                  <div className="h-10 bg-neutral-900 rounded w-full" />
+                  <div className="h-12 bg-neutral-900 rounded w-2/3" />
+                </div>
+              </div>
+            ) : ordersFetchError ? (
+              <div className="p-8 bg-red-950/20 border border-red-900/30 rounded-2xl text-center space-y-4">
+                <div className="w-12 h-12 bg-red-950/50 rounded-full flex items-center justify-center text-red-500 mx-auto border border-red-900/50">
+                  <AlertCircle size={20} />
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-red-400 font-serif font-bold text-sm">Security Matrix Link Error</h4>
+                  <p className="text-neutral-500 text-[11px] max-w-sm mx-auto leading-relaxed">{ordersFetchError}</p>
+                </div>
+                <button
+                  onClick={() => window.location.reload()}
+                  className="bg-neutral-950 text-white border border-neutral-800 hover:border-gold px-5 py-2 text-[10px] font-mono tracking-widest font-bold rounded cursor-pointer transition-colors"
+                >
+                  RE-ESTABLISH LINK
+                </button>
+              </div>
+            ) : customerOrders.length === 0 ? (
               <div className="p-8 bg-neutral-950/20 border border-neutral-900 rounded-2xl flex flex-col items-center text-center space-y-4">
                 <div className="w-14 h-14 bg-neutral-900/40 rounded-full flex items-center justify-center text-neutral-600 border border-neutral-800">
                   <Truck size={24} />
                 </div>
                 <div className="space-y-1 max-w-sm">
                   <h4 className="text-white text-sm font-serif font-bold">No Active Ingress Shipments</h4>
-                  <p className="text-neutral-500 text-[11px] leading-relaxed">No high-safety dispatches are registered under your coordinate registers. Build an order sequence inside the shop.</p>
+                  <p className="text-neutral-500 text-[11px] leading-relaxed">No high-safety dispatches are registered under your collector coordinate registers. Build a watch order sequence inside the shop.</p>
                 </div>
                 <Link to="/shop" className="bg-gold hover:bg-white text-black text-[10px] font-mono font-bold tracking-[0.18em] px-6 py-3 transition-all duration-300 uppercase rounded-sm cursor-pointer mt-1">
                   Browse Active Catalogue
                 </Link>
               </div>
             ) : (
-              <div className="space-y-6">
-                {customerOrders.map((ord: any) => (
-                  <div key={ord.id} className="p-6 bg-neutral-950 border border-neutral-900 rounded-2xl space-y-6">
-                    {/* Order summary info */}
-                    <div className="flex flex-col sm:flex-row justify-between gap-4 border-b border-neutral-900 pb-4">
-                      <div className="space-y-1">
-                        <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Acquisition Token / Location</span>
-                        <div className="flex items-center gap-3">
-                          <span className="text-white text-xs font-mono font-bold tracking-wider">{ord.id}</span>
-                          <span className="text-[10px] font-mono text-gold bg-gold/10 px-2 py-0.5 border border-gold/15 rounded-xs select-none">
-                            CALIBRATED & SECURE
-                          </span>
+              <div className="space-y-8">
+                {customerOrders.map((ord: any) => {
+                  // Determine status index for visual timeline
+                  // 5 stages: Pending (0), Processing (1), Shipped (2), Out for Delivery (3), Delivered (4)
+                  const rawStatus = (ord.order_status || ord.status || "Pending").trim().toLowerCase();
+                  let activeIndex = 0;
+                  let isCancelled = false;
+
+                  if (rawStatus === "pending") {
+                    activeIndex = 0;
+                  } else if (rawStatus === "processing" || rawStatus === "calibrating") {
+                    activeIndex = 1;
+                  } else if (rawStatus === "shipped" || rawStatus === "transit" || rawStatus === "shipped and tracking") {
+                    activeIndex = 2;
+                  } else if (rawStatus === "out for delivery" || rawStatus === "customs" || rawStatus === "custom") {
+                    activeIndex = 3;
+                  } else if (rawStatus === "delivered" || rawStatus === "fulfilled" || rawStatus === "success" || rawStatus === "completed") {
+                    activeIndex = 4;
+                  } else if (rawStatus === "cancelled") {
+                    isCancelled = true;
+                    activeIndex = -1;
+                  }
+
+                  const trackingStages = [
+                    { label: "Pending", detail: "Registered", text: "Order registered in Pingaksh vaults. Placement confirmed.", icon: Clock },
+                    { label: "Processing", detail: "Calibrating", text: "Watch caliber calibration, cleanroom testing & casing alignment.", icon: ShieldCheck },
+                    { label: "Shipped", detail: "Transit Flight", text: "Courier pickup finalized. Handover to high-safety air express cargo.", icon: Truck },
+                    { label: "Out for Delivery", detail: "Courier Hub", text: "Vehicle transit dispatched. Personal delivery agent routing to destination.", icon: ShoppingBag },
+                    { label: "Delivered", detail: "Handover", text: "Secure handoff completed. Personal wooden presentation case authorized.", icon: CheckCircle2 }
+                  ];
+
+                  // Estimated Delivery Time (Order Date + 5 calendar days)
+                  const getEstimatedDeliveryString = (createdAt?: string) => {
+                    const dateObj = createdAt ? new Date(createdAt) : new Date();
+                    const estDate = new Date(dateObj.getTime() + 5 * 24 * 60 * 60 * 1000);
+                    return estDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+                  };
+
+                  return (
+                    <div key={ord.id} className="p-6 bg-neutral-950 border border-neutral-900 rounded-2xl space-y-6 hover:border-neutral-800 transition-colors duration-300 relative overflow-hidden group">
+                      
+                      {/* Ambient background decoration */}
+                      <div className="absolute top-0 right-0 w-24 h-24 bg-gold/2 rounded-full blur-2xl pointer-events-none group-hover:bg-gold/4 transition-all duration-300" />
+                      
+                      {/* Order info header */}
+                      <div className="flex flex-col md:flex-row justify-between gap-4 border-b border-neutral-900/60 pb-5">
+                        <div className="space-y-2">
+                          <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Acquisition Reference</span>
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <span className="text-white text-sm font-mono font-bold tracking-wider">{ord.id}</span>
+                            
+                            {/* Animated system status badge */}
+                            <span className={`px-2.5 py-0.5 rounded-full font-mono text-[9px] uppercase tracking-wider font-bold border flex items-center gap-1.5 select-none ${
+                              isCancelled ? "bg-red-950/60 text-red-400 border-red-900/30" :
+                              activeIndex === 4 ? "bg-emerald-950/60 text-emerald-400 border-emerald-900/30 animate-pulse" :
+                              activeIndex === 0 ? "bg-amber-950/40 text-amber-550 border-amber-900/20" :
+                              "bg-gold/15 text-gold border-gold/20 animate-pulse"
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full z-10 ${
+                                isCancelled ? "bg-red-400" :
+                                activeIndex === 4 ? "bg-emerald-400" :
+                                "bg-gold"
+                              }`} />
+                              {ord.order_status || ord.status || "Pending"}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:flex md:flex-col md:text-right gap-y-2 gap-x-4">
+                          <div>
+                            <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Order Date</span>
+                            <span className="text-neutral-200 text-xs font-mono font-medium">{ord.date}</span>
+                          </div>
+                          <div className="md:mt-1.5">
+                            <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Ledger Total</span>
+                            <span className="text-gold text-sm font-mono font-bold">{getFormattedPrice(ord.total)}</span>
+                          </div>
                         </div>
                       </div>
 
-                      <div className="sm:text-right space-y-1">
-                        <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Final Ledger Total</span>
-                        <span className="text-white text-sm font-mono font-bold text-gold">{getFormattedPrice(ord.total)}</span>
+                      {/* Payment Method & Delivery details row */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-neutral-900/20 border border-neutral-900 p-4 rounded-xl text-xs font-sans">
+                        <div className="space-y-1">
+                          <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Security Dispatch Logistics</span>
+                          <p className="text-neutral-200 leading-normal">
+                            Method: <span className="text-gold font-mono font-medium ml-1 bg-gold/5 px-1.5 py-0.5 rounded border border-gold/10">
+                              {ord.payment_method === "COD" ? "Cash on Delivery (COD)" : (ord.payment_method || "Secured Card Link")}
+                            </span>
+                          </p>
+                          {ord.shipping_name && (
+                            <p className="text-neutral-400 text-[11px] mt-0.5">
+                              Deliveree: <span className="text-neutral-300 font-medium">{ord.shipping_name}</span>
+                            </p>
+                          )}
+                          {ord.shipping_address && (
+                            <p className="text-neutral-400 text-[10.5px] leading-relaxed font-light text-neutral-400 mt-1 max-w-sm">
+                              📍 {ord.shipping_address}, {ord.shipping_city}, {ord.shipping_state} - {ord.shipping_zip}
+                            </p>
+                          )}
+                        </div>
+                        <div className="space-y-1 md:text-right flex flex-col md:justify-between md:items-end">
+                          <div>
+                            <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Estimated Arrival Date</span>
+                            <p className="text-white text-xs font-serif font-bold text-gold tracking-wide mt-0.5">
+                              📅 {getEstimatedDeliveryString(ord.created_at)}
+                            </p>
+                          </div>
+                          <p className="text-neutral-500 text-[10px] font-mono leading-relaxed mt-1">
+                            * Hand-calibrated and shipped in individual premium sealed presentation vaults.
+                          </p>
+                        </div>
                       </div>
-                    </div>
 
-                    {/* Logistics Timeline Graph */}
-                    <div className="py-2">
-                      <span className="text-neutral-400 text-[9px] uppercase tracking-widest font-mono block mb-5">Dispatches Security Timeline (India Only)</span>
-                      
-                      {/* Vertical Timeline Nodes */}
-                      <div className="relative pl-6 space-y-6">
-                        {/* Connecting track line */}
-                        <div className="absolute top-2 bottom-2 left-[9px] w-[1px] bg-neutral-905 bg-neutral-900" />
+                      {/* Visual Order Tracking Timeline Stepper */}
+                      <div className="py-2 space-y-4">
+                        <span className="text-neutral-400 text-[9px] uppercase tracking-widest font-mono block">Real-Time Dispatch Progress Map</span>
                         
-                        {(() => {
-                          const statusList = (ord.status || "").toLowerCase();
-                          let activeIndex = 0; // default for calibrating/pending/etc
-                          
-                          if (statusList === "transit") {
-                            activeIndex = 1;
-                          } else if (statusList === "customs" || statusList === "custom") {
-                            activeIndex = 2;
-                          } else if (statusList === "fulfilled") {
-                            activeIndex = 3;
-                          } else if (statusList === "cancelled") {
-                            activeIndex = -1;
-                          }
+                        {isCancelled ? (
+                          <div className="text-center p-6 bg-red-950/20 border border-red-900/30 rounded-xl space-y-1.5">
+                            <span className="font-mono text-xs text-red-400 font-semibold uppercase tracking-wider block">Acquisition Cancellation logged</span>
+                            <p className="text-red-300/80 text-[11px] font-sans leading-relaxed max-w-md mx-auto font-light">
+                              This order sequence has been suspended. Any pre-authorization holds will release automatically. Contact Pingaksh support for reinstatement.
+                            </p>
+                          </div>
+                        ) : (
+                          <>
+                            {/* Desktop Horizontal Stepper */}
+                            <div className="hidden md:block relative pt-4 pb-2 select-none">
+                              {/* Background Connector Rail */}
+                              <div className="absolute top-[21px] left-[5%] right-[5%] h-[2px] bg-neutral-900 z-0" />
+                              
+                              {/* Glowing Active Progress Connector */}
+                              <div 
+                                className="absolute top-[21px] left-[5%] h-[2px] bg-gradient-to-r from-gold/50 to-gold transition-all duration-700 ease-in-out z-0 shadow-[0_0_8px_rgba(212,175,55,0.4)]" 
+                                style={{ width: `${activeIndex >= 0 ? (activeIndex / (trackingStages.length - 1)) * 90 : 0}%` }}
+                              />
 
-                          const steps = [
-                            {
-                              label: "Production",
-                              description: "Precision watch assembly, horological calibration & premium quality assurance testing at the Bangalore Cleanroom Facility.",
-                              subText: "Calibration & casing verification completed with precision.",
-                            },
-                            {
-                              label: "Handover",
-                              description: "Courier pickup initialized. Custody securely transferred to our high-safety logistics partner (Blue Dart Air Express).",
-                              subText: activeIndex >= 1 ? "Dispatched from terminal hub." : "Preparing transport container & protective seals.",
-                            },
-                            {
-                              label: "Domestic Transit",
-                              description: "Payload in premium cargo transit across regional borders with shock, temperature, and pressure sensors logging.",
-                              subText: activeIndex >= 2 ? "In transit through domestic airspace." : "Awaiting flight route loading.",
-                            },
-                            {
-                              label: "Final Delivery",
-                              description: "Handover coordinates verified. Handcrafted wooden case presented by our personal courier agent.",
-                              subText: activeIndex >= 3 ? "Successfully signed and authorized." : "Awaiting destination courier dispatch.",
-                            }
-                          ];
+                              <div className="flex justify-between relative z-10">
+                                {trackingStages.map((stage, idx) => {
+                                  const isStepCompleted = idx < activeIndex;
+                                  const isStepActive = idx === activeIndex;
+                                  const isStepPending = idx > activeIndex;
+                                  const StageIcon = stage.icon;
 
-                          return steps.map((step, index) => {
-                            let isCompleted = index < activeIndex;
-                            let isActive = index === activeIndex;
-                            let isPending = index > activeIndex;
-                            
-                            if (activeIndex === 3) {
-                              isCompleted = true; // All completed
-                              isActive = false;
-                              isPending = false;
-                            }
+                                  return (
+                                    <div key={idx} className="flex flex-col items-center w-1/5 text-center px-1">
+                                      {/* Icon/Dot container */}
+                                      <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-all duration-500 ${
+                                        isStepCompleted ? "bg-gold border-2 border-neutral-950 text-black shadow-lg shadow-gold/20 scale-105" :
+                                        isStepActive ? "bg-neutral-950 border-2 border-gold text-gold scale-110 shadow-lg shadow-gold/40 animate-pulse" :
+                                        "bg-neutral-950 border border-neutral-800 text-neutral-600"
+                                      }`}>
+                                        {isStepCompleted ? (
+                                          <Check size={14} className="stroke-[3]" />
+                                        ) : (
+                                          <StageIcon size={14} />
+                                        )}
+                                      </div>
 
-                            if (statusList === "cancelled") {
-                              isCompleted = false;
-                              isActive = false;
-                              isPending = true;
-                            }
-
-                            return (
-                              <div key={index} className="relative flex gap-4 text-xs">
-                                {/* Bullet indicator */}
-                                <div className="absolute -left-[22px] top-1.5 z-10 flex items-center justify-center">
-                                  {isCompleted ? (
-                                    <span className="w-5 h-5 rounded-full bg-gold border-2 border-neutral-950 flex items-center justify-center text-black font-extrabold text-[8px] shadow-sm shadow-gold/20">
-                                      ✓
-                                    </span>
-                                  ) : isActive ? (
-                                    <span className="w-5 h-5 rounded-full bg-neutral-950 border border-gold flex items-center justify-center text-gold font-bold text-[8px] animate-pulse">
-                                      ●
-                                    </span>
-                                  ) : (
-                                    <span className="w-5 h-5 rounded-full bg-neutral-950 border border-neutral-800 flex items-center justify-center text-neutral-600 font-medium text-[8px]">
-                                      {index + 1}
-                                    </span>
-                                  )}
-                                </div>
-
-                                <div className="space-y-1 pl-1 select-none">
-                                  <div className="flex items-center gap-2">
-                                    <h4 className={`font-serif font-bold text-sm tracking-wide ${isCompleted ? 'text-white' : isActive ? 'text-gold' : 'text-neutral-500'}`}>
-                                      {step.label}
-                                    </h4>
-                                    {isActive && (
-                                      <span className="text-[7.5px] font-mono uppercase bg-gold/10 border border-gold/20 text-gold px-1.5 py-0.5 rounded-xs animate-pulse">
-                                        ACTIVE STAGE
+                                      {/* Stage label text */}
+                                      <span className={`text-[10px] font-mono font-bold tracking-wider mt-2.5 block ${
+                                        isStepActive ? "text-gold" : isStepCompleted ? "text-neutral-200" : "text-neutral-500"
+                                      }`}>
+                                        {stage.label}
                                       </span>
-                                    )}
-                                    {isCompleted && (
-                                      <span className="text-[7.5px] font-mono text-neutral-500 uppercase">
-                                        COMPLETED
+                                      
+                                      <span className="text-[8px] font-mono text-neutral-550 mt-0.5 max-w-[120px] font-light truncate select-none block leading-tight">
+                                        {stage.detail}
                                       </span>
-                                    )}
-                                  </div>
-                                  <p className="text-neutral-400 font-sans leading-relaxed text-[11px] max-w-xl">
-                                    {step.description}
-                                  </p>
-                                  <p className="text-neutral-500 font-mono text-[9px] leading-tight flex items-center gap-1">
-                                    <span className="text-gold/40">↳</span> {step.subText}
-                                  </p>
-                                </div>
+                                    </div>
+                                  );
+                                })}
                               </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    </div>
 
-                    {/* Order Timepieces list */}
-                    <div className="space-y-3 pt-4 border-t border-neutral-900/40">
-                      <h5 className="text-neutral-400 text-[9.5px] uppercase tracking-wider font-mono">Affiliated Specimen Specifications</h5>
-                      <div className="grid grid-cols-1 divide-y divide-neutral-950">
-                        {ord.items && ord.items.map((it: any) => (
-                          <div key={it.id} className="py-3 flex justify-between items-center gap-4 text-xs">
-                            <div className="flex items-center gap-3">
-                              {it.image && (
-                                <img src={it.image} alt="wristwatch micro" className="w-8 h-10 object-cover bg-black rounded border border-neutral-900 shrink-0" referrerPolicy="no-referrer" />
-                              )}
-                              <div className="space-y-0.5">
-                                <span className="font-serif text-white font-bold block">{it.name}</span>
-                                <span className="text-neutral-500 font-mono text-[9px] block">QUANTITY: {it.quantity} SPECIMENS</span>
+                              {/* Active description box below stepper */}
+                              <div className="mt-5 p-3.5 bg-neutral-900/10 border border-neutral-900/60 rounded-xl flex items-start gap-3">
+                                <div className="mt-0.5 text-gold shrink-0">
+                                  ●
+                                </div>
+                                <div className="space-y-0.5 text-left">
+                                  <h4 className="text-white font-serif text-[11px] font-bold tracking-wide">
+                                    Current Location: {trackingStages[activeIndex]?.label} Stage
+                                  </h4>
+                                  <p className="text-neutral-400 font-sans leading-relaxed text-[11.5px] font-light">
+                                    {trackingStages[activeIndex]?.text}
+                                  </p>
+                                </div>
                               </div>
                             </div>
-                            <span className="text-gold font-mono font-bold">{getFormattedPrice(it.price * it.quantity)}</span>
-                          </div>
-                        ))}
+
+                            {/* Mobile Vertical Stepper (renders only on sm screens) */}
+                            <div className="md:hidden relative pl-6 space-y-6 pt-2 select-none border-l border-neutral-900/80 left-[11px]">
+                              {trackingStages.map((stage, idx) => {
+                                const isStepCompleted = idx < activeIndex;
+                                const isStepActive = idx === activeIndex;
+                                const isStepPending = idx > activeIndex;
+                                const StageIcon = stage.icon;
+
+                                return (
+                                  <div key={idx} className="relative flex gap-3 text-xs leading-normal">
+                                    {/* Vertical Node Icon */}
+                                    <div className="absolute -left-[30px] top-1 z-10 flex items-center justify-center">
+                                      <div className={`w-7 h-7 rounded-full flex items-center justify-center transition-all duration-300 ${
+                                        isStepCompleted ? "bg-gold text-black border border-neutral-950 shadow-md shadow-gold/10" :
+                                        isStepActive ? "bg-neutral-950 border border-gold text-gold animate-pulse scale-105" :
+                                        "bg-neutral-950 border border-neutral-900 text-neutral-600"
+                                      }`}>
+                                        {isStepCompleted ? (
+                                          <Check size={11} className="stroke-[3]" />
+                                        ) : (
+                                          <StageIcon size={11} />
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="space-y-1">
+                                      <div className="flex items-center gap-2">
+                                        <h4 className={`font-serif font-bold text-xs tracking-wide ${
+                                          isStepCompleted ? "text-neutral-305 text-white" : isStepActive ? "text-gold" : "text-neutral-500"
+                                        }`}>
+                                          {stage.label}
+                                        </h4>
+                                        {isStepActive && (
+                                          <span className="text-[7px] font-mono uppercase bg-gold/15 border border-gold/20 text-gold px-1.5 py-0.5 rounded-sm animate-pulse">
+                                            ACTIVE
+                                          </span>
+                                        )}
+                                      </div>
+                                      
+                                      <p className={`text-[10px] font-sans leading-relaxed font-light ${
+                                        isStepActive ? "text-neutral-300" : isStepCompleted ? "text-neutral-400" : "text-neutral-600"
+                                      }`}>
+                                        {idx === activeIndex ? stage.text : `Registered step sequence: ${stage.detail}`}
+                                      </p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Order Timepieces list */}
+                      <div className="space-y-3 pt-4 border-t border-neutral-900/40">
+                        <h5 className="text-neutral-400 text-[9px] uppercase tracking-widest font-mono">Affiliated Watch Specifications ({ord.items ? ord.items.reduce((sum: number, i: any) => sum + Number(i.quantity), 0) : 0} specimens)</h5>
+                        <div className="grid grid-cols-1 divide-y divide-neutral-900/30">
+                          {ord.items && ord.items.map((it: any) => (
+                            <div key={it.id} className="py-2.5 flex justify-between items-center gap-4 text-xs font-sans">
+                              <div className="flex items-center gap-3">
+                                {it.image && (
+                                  <img 
+                                    src={it.image} 
+                                    alt="wristwatch micro" 
+                                    className="w-8 h-10 object-cover bg-black rounded border border-neutral-900 shrink-0" 
+                                    referrerPolicy="no-referrer" 
+                                  />
+                                )}
+                                <div className="space-y-0.5">
+                                  <span className="font-serif text-white font-bold block">{it.name}</span>
+                                  <span className="text-neutral-500 font-mono text-[9px] block">QUANTITY: {it.quantity} UNITS / SPECIMENS</span>
+                                </div>
+                              </div>
+                              <span className="text-gold font-mono font-bold text-neutral-300">
+                                {getFormattedPrice(it.price * it.quantity)}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -5912,26 +6092,26 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                         </td>
                         <td className="py-4 px-4 font-mono uppercase tracking-widest text-[9px] font-bold">
                           <span className={`px-2.5 py-1 rounded inline-block ${
-                            ord.status === "fulfilled" ? "bg-emerald-950/90 text-emerald-400 border border-emerald-900/30" :
-                            ord.status === "cancelled" ? "bg-red-950/95 text-red-400 border border-red-900/30" :
-                            ord.status === "calibrating" ? "bg-blue-950/90 text-blue-400 border border-blue-900/30" :
-                            ord.status === "transit" ? "bg-amber-950/90 text-amber-400 border border-amber-900/30" :
-                            "bg-neutral-950 border border-neutral-850 text-neutral-400"
+                            (ord.order_status || ord.status) === "Cancelled" || ord.status === "cancelled" ? "bg-red-950/95 text-red-400 border border-red-900/40" :
+                            (ord.order_status || ord.status) === "Delivered" || ord.status === "fulfilled" ? "bg-emerald-950/90 text-emerald-400 border border-emerald-900/30 font-bold" :
+                            (ord.order_status || ord.status) === "Pending" ? "bg-stone-900 text-stone-300 border border-stone-800" :
+                            "bg-amber-950/90 text-amber-550 border border-amber-900/30 animate-pulse font-bold"
                           }`}>
-                            {ord.status}
+                            {ord.order_status || ord.status || "Pending"}
                           </span>
                         </td>
                         <td className="py-4 px-4">
                           <select
-                            value={ord.status}
+                            value={ord.order_status || ord.status || "Pending"}
                             onChange={(e) => handleUpdateStatus(ord.id, e.target.value as any)}
-                            className="bg-neutral-950 border border-neutral-800 rounded px-3 py-1.5 focus:outline-none focus:border-gold text-xs text-neutral-300 cursor-pointer"
+                            className="bg-neutral-950 border border-neutral-800 rounded px-2.5 py-1.5 focus:outline-none focus:border-gold text-xs text-neutral-300 font-mono cursor-pointer"
                           >
-                            <option value="calibrating">Calibrating</option>
-                            <option value="transit">Transit</option>
-                            <option value="customs">Customs</option>
-                            <option value="fulfilled">Fulfilled</option>
-                            <option value="cancelled">Cancelled</option>
+                            <option value="Pending">1. Pending</option>
+                            <option value="Processing">2. Processing</option>
+                            <option value="Shipped">3. Shipped</option>
+                            <option value="Out for Delivery">4. Out for Delivery</option>
+                            <option value="Delivered">5. Delivered</option>
+                            <option value="Cancelled">X. Cancelled</option>
                           </select>
                         </td>
                       </tr>
