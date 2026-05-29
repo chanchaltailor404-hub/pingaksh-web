@@ -1085,14 +1085,71 @@ const Shop = ({
 const Checkout = ({ 
   items, 
   onSuccess,
-  user
+  user,
+  showToast: propShowToast
 }: { 
   items: CartItem[]; 
   onSuccess: () => void;
   user: any;
+  showToast?: (message: string, type?: "success" | "error" | "info") => void;
 }) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [toasts, setToasts] = useState<{ id: string; type: "success" | "error" | "info"; message: string }[]>([]);
+
+  const showToast = propShowToast || ((message: string, type: "success" | "error" | "info" = "success") => {
+    const id = Date.now().toString() + Math.random().toString(36).substring(2, 7);
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4500);
+  });
+
+  const sendEmailJSConfirmation = async (customerName: string, customerEmail: string, totalAmount: number) => {
+    const serviceId = "service_3lifj06";
+    const templateId = "template_2d81u7h";
+    const publicKey = "wJ7yzJGWUfIhTrU9g";
+
+    console.log("[EmailJS] Sending confirmation email...", {
+      customer_name: customerName,
+      total_amount: totalAmount,
+      customer_email: customerEmail
+    });
+
+    try {
+      const response = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          service_id: serviceId,
+          template_id: templateId,
+          user_id: publicKey,
+          template_params: {
+            customer_name: customerName,
+            total_amount: `₹${totalAmount.toLocaleString("en-IN")}`,
+            customer_email: customerEmail
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`EmailJS status ${response.status}: ${errText}`);
+      }
+
+      console.log("[EmailJS] Confirmation success");
+      if (showToast) {
+        showToast(`Verification receipt sent to ${customerEmail}.`, "success");
+      }
+    } catch (emailErr: any) {
+      console.error("[EmailJS] Confirmation failed:", emailErr);
+      if (showToast) {
+        showToast("Friction in email dispatch. Order placed successfully.", "error");
+      }
+    }
+  };
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
     email: "",
@@ -1138,39 +1195,86 @@ const Checkout = ({
       let orderId = "ORD-" + Math.floor(100000 + Math.random() * 900000);
 
       if (isSupabaseConfigured && supabase) {
-        try {
-          const { data: authUserRes } = await supabase.auth.getUser();
-          const activeUid = authUserRes?.user?.id || null;
-          
-          const createdOrderId = await createSupabaseOrder(
-            activeUid,
-            formData.email,
-            formData.phone,
-            total,
-            orderItems,
-            {
-              payment_method: "COD",
-              order_status: "Pending",
-              name: formData.name,
-              address: formData.address,
-              city: formData.city,
-              state: formData.state,
-              zip: formData.zip
-            }
-          );
+        // 1. Get current authenticated user
+        const { data: authUserRes, error: userError } = await supabase.auth.getUser();
+        if (userError) {
+          console.error("[Checkout] Error fetching authenticated user:", userError);
+        }
+        const activeUid = authUserRes?.user?.id || null;
 
-          if (createdOrderId) {
-            orderId = createdOrderId;
-          }
+        // 2. Build order payload according to the actual DB schema
+        const orderPayload = {
+          user_id: activeUid,
+          customer_email: formData.email,
+          customer_phone: formData.phone || null,
+          total: total,
+          status: "calibrating",
+          payment_method: "COD",
+          order_status: "Pending",
+          shipping_name: formData.name || null,
+          shipping_address: formData.address || null,
+          shipping_city: formData.city || null,
+          shipping_state: formData.state || null,
+          shipping_zip: formData.zip || null
+        };
 
-          // Requirements: clear cart table entries for that user
-          if (activeUid) {
-            console.log(`[COD Checkout] Clearing database cart items for authenticated user ${activeUid}`);
+        // 3. Log the payload BEFORE performing the insert
+        console.log("[Supabase Order] Order Payload to Insert:", orderPayload);
+
+        // 4. Perform direct database insert on the 'orders' table
+        const { data: orderResult, error: insertError } = await supabase
+          .from("orders")
+          .insert(orderPayload)
+          .select()
+          .single();
+
+        // 5. Log the insert response and insert error
+        console.log("[Supabase Order] Insert Response Data:", orderResult);
+        console.log("[Supabase Order] Insert Error:", insertError);
+
+        // 6. Handle insert error - abort and show error toast
+        if (insertError) {
+          console.error("[Supabase Order Placement Failed]:", insertError);
+          const userFriendlyErrorMsg = insertError.message || "Database write operation was rejected by Row-Level Security policy or database constraints.";
+          showToast(`Database error: ${userFriendlyErrorMsg}`, "error");
+          throw new Error(`Failed to log order in our central database registry: ${userFriendlyErrorMsg}`);
+        }
+
+        if (!orderResult) {
+          showToast("Failed to retrieve the created order reference.", "error");
+          throw new Error("No order response returned from the database server.");
+        }
+
+        // Order successfully created! 
+        orderId = orderResult.id;
+        console.log("[Supabase Order] Order successfully inserted with ID:", orderId);
+
+        // 7. Insert the order items linked to this order
+        const itemsPayload = orderItems.map(item => ({
+          order_id: orderId,
+          product_name: item.name,
+          price: item.price,
+          quantity: item.quantity
+        }));
+
+        console.log("[Supabase Order Items] Inserting order items:", itemsPayload);
+        const { error: itemsError } = await supabase
+          .from("order_items")
+          .insert(itemsPayload);
+
+        if (itemsError) {
+          console.error("[Supabase Order Items] Failed to register watch items:", itemsError);
+          showToast("Order items logged with trace error. Order is secure.", "info");
+        }
+
+        // 8. Clear the synced persistent cart entries for the user
+        if (activeUid) {
+          console.log(`[Checkout] Clearing database cart items for authenticated user ${activeUid}`);
+          try {
             await syncSupabaseCart(activeUid, []);
+          } catch (syncErr) {
+            console.error("[Checkout Sync Error] Ignored sync Cart clear exception:", syncErr);
           }
-        } catch (supabaseErr) {
-          console.error("[COD Checkout Database Sync Failed]:", supabaseErr);
-          // Let client-side local storage store work as fallback
         }
       }
 
@@ -1198,6 +1302,13 @@ const Checkout = ({
 
       // 5. After successful order: clear cart table, show success message, redirect to success
       onSuccess(); // local cart clear
+      
+      // Send EmailJS Order Confirmation under protective try-catch to avoid breaking checkout flow
+      try {
+        await sendEmailJSConfirmation(formData.name, formData.email, total);
+      } catch (emailErr) {
+        console.error("[EmailJS Dispatch Protection Bypass] Email confirmation error did not propagate:", emailErr);
+      }
       
       // Redirect to success
       navigate("/success");
@@ -1386,6 +1497,28 @@ const Checkout = ({
             </div>
           </div>
         </div>
+      </div>
+      
+      {/* Floating Checkout Notifications Toasts */}
+      <div className="fixed bottom-6 right-6 z-[9999] space-y-2 max-w-sm w-full pointer-events-none">
+        <AnimatePresence>
+          {toasts.map(t => (
+            <motion.div
+              key={t.id}
+              initial={{ opacity: 0, y: 30, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9, y: 15 }}
+              className={`pointer-events-auto p-4 rounded-xl border flex items-center gap-3 shadow-2xl backdrop-blur-md ${
+                t.type === "success" ? "bg-emerald-950/80 border-emerald-800 text-emerald-300" :
+                t.type === "error" ? "bg-red-950/80 border-red-800 text-red-300" :
+                "bg-neutral-900/90 border-neutral-800 text-neutral-200"
+              }`}
+            >
+              {t.type === "success" ? <Check size={18} /> : <AlertCircle size={18} />}
+              <p className="text-xs font-mono font-medium leading-relaxed">{t.message}</p>
+            </motion.div>
+          ))}
+        </AnimatePresence>
       </div>
     </div>
   );
