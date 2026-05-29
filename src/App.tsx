@@ -3462,7 +3462,92 @@ const ProfilePage = ({
 
   if (!user) return null;
 
-  const wishlistWatches = (watches.length > 0 ? watches : WATCHES).filter(w => wishlist.includes(w.id));
+  const [wishlistProducts, setWishlistProducts] = useState<any[]>([]);
+  const [isWishlistLoading, setIsWishlistLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const fetchWishlistDetailed = async () => {
+      if (!user?.uid) return;
+      
+      if (isSupabaseConfigured && supabase) {
+        setIsWishlistLoading(true);
+        try {
+          const tableName = await getWishlistTableName();
+          let finalUserId = user.uid;
+          try {
+            const { data: authUserRes } = await supabase.auth.getUser();
+            if (authUserRes && authUserRes.user) {
+              finalUserId = authUserRes.user.id;
+            }
+          } catch {}
+
+          let { data: wishData, error: wishErr } = await supabase
+            .from(tableName || "wishlist")
+            .select("product_id")
+            .eq("user_id", finalUserId);
+
+          if (wishErr && (wishErr.code === "42P01" || wishErr.message?.includes("does not exist"))) {
+            const altTable = tableName === "wishlist" ? "wishlists" : "wishlist";
+            const fallbackResult = await supabase
+              .from(altTable)
+              .select("product_id")
+              .eq("user_id", finalUserId);
+            if (!fallbackResult.error) {
+              wishData = fallbackResult.data;
+              wishErr = null;
+            }
+          }
+
+          if (wishErr) {
+            console.error("Error fetching wishlist rows for ProfilePage:", wishErr);
+            if (active) setWishlistProducts([]);
+            return;
+          }
+
+          if (wishData && wishData.length > 0) {
+            const productIds = wishData.map(d => d.product_id).filter(Boolean);
+            if (productIds.length > 0) {
+              const { data: productsData, error: productsErr } = await supabase
+                .from("products")
+                .select("id, name, price, image, category, description")
+                .in("id", productIds);
+
+              if (productsErr) {
+                console.error("Error fetching products details for wishlist in ProfilePage:", productsErr);
+                if (active) setWishlistProducts([]);
+              } else if (active) {
+                setWishlistProducts(productsData || []);
+              }
+            } else if (active) {
+              setWishlistProducts([]);
+            }
+          } else if (active) {
+            setWishlistProducts([]);
+          }
+        } catch (err) {
+          console.error("Exception loading detailed wishlist inside ProfilePage:", err);
+          if (active) setWishlistProducts([]);
+        } finally {
+          if (active) setIsWishlistLoading(false);
+        }
+      } else {
+        // Fallback to static lists matching elements inside global `wishlist` array
+        const currentCatalog = (watches.length > 0 ? watches : WATCHES);
+        const filtered = currentCatalog.filter(w => wishlist.includes(w.id));
+        if (active) {
+          setWishlistProducts(filtered);
+          setIsWishlistLoading(false);
+        }
+      }
+    };
+
+    fetchWishlistDetailed();
+
+    return () => {
+      active = false;
+    };
+  }, [user?.uid, wishlist, watches]);
 
   const handleCopy = (txt: string) => {
     navigator.clipboard.writeText(txt);
@@ -3823,7 +3908,12 @@ const ProfilePage = ({
           </div>
 
           <div className="bg-neutral-900/10 border border-neutral-900 p-6 rounded-2xl space-y-4">
-            {wishlistWatches.length === 0 ? (
+            {isWishlistLoading ? (
+              <div className="flex flex-col items-center justify-center py-16 space-y-4">
+                <div className="w-8 h-8 border-2 border-neutral-800 border-t-gold rounded-full animate-spin"></div>
+                <p className="text-[10px] text-neutral-500 font-mono tracking-widest uppercase animate-pulse">Retrieving vault keys...</p>
+              </div>
+            ) : wishlistProducts.length === 0 ? (
               <div className="text-center py-12 space-y-3">
                 <Heart size={24} className="text-neutral-700 mx-auto" />
                 <p className="text-neutral-500 text-xs font-sans leading-relaxed max-w-xs mx-auto">No timepieces have been favorited into your wishlist. Explore our catalogue to secure selections.</p>
@@ -3833,16 +3923,23 @@ const ProfilePage = ({
               </div>
             ) : (
               <div className="divide-y divide-neutral-900/50">
-                {wishlistWatches.map((w) => (
+                {wishlistProducts.map((w) => (
                   <div key={w.id} className="py-4.5 flex gap-4 first:pt-0 last:pb-0 font-sans">
                     <div className="w-14 h-18 bg-neutral-950 overflow-hidden rounded border border-neutral-800 shrink-0 select-none">
                       <img src={w.image} alt={w.name} className="w-full h-full object-cover grayscale opacity-70 hover:opacity-100 hover:grayscale-0 transition-all duration-300" referrerPolicy="no-referrer" />
                     </div>
                     <div className="flex-1 flex flex-col justify-between">
                       <div className="space-y-0.5">
-                        <Link to={`/product/${w.id}`} className="font-serif text-white hover:text-gold font-bold text-xs leading-none transition-colors">
-                          {w.name}
-                        </Link>
+                        <div className="flex items-center justify-between gap-2">
+                          <Link to={`/product/${w.id}`} className="font-serif text-white hover:text-gold font-bold text-xs leading-none transition-colors">
+                            {w.name}
+                          </Link>
+                          {w.category && (
+                            <span className="text-[8px] font-mono text-neutral-500 uppercase tracking-wider bg-neutral-900/60 px-1.5 py-0.5 rounded border border-neutral-800/80">
+                              {w.category}
+                            </span>
+                          )}
+                        </div>
                         <p className="text-gold font-mono text-[11px] font-bold">{getFormattedPrice(w.price)}</p>
                       </div>
 
@@ -3854,8 +3951,12 @@ const ProfilePage = ({
                           Acquire
                         </button>
                         <button
-                          onClick={() => onToggleWishlist(w.id)}
-                          className="text-neutral-500 hover:text-red-400 text-[10px] font-mono hover:scale-105 transition-all text-neutral-500"
+                          onClick={() => {
+                            // Optimistic local filter to make UI feel instantaneous & premium
+                            setWishlistProducts(prev => prev.filter(p => p.id !== w.id));
+                            onToggleWishlist(w.id);
+                          }}
+                          className="text-neutral-500 hover:text-red-400 text-[10px] font-mono hover:scale-105 transition-all text-neutral-500 cursor-pointer"
                         >
                           Remove
                         </button>
