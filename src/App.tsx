@@ -4771,6 +4771,16 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
     loadAdminWishlists();
     loadAdminCarts();
 
+    // High-performance background polling interval to reinforce live status syncing
+    const pollInterval = setInterval(() => {
+      loadAdminProducts(true);
+      loadAdminOrders(true);
+      loadAdminSubscribers(true);
+      loadAdminProfiles(true);
+      loadAdminWishlists(true);
+      loadAdminCarts(true);
+    }, 12000);
+
     if (isSupabaseConfigured && supabase) {
       // Real-time PostgreSQL changes replication listener for watches
       const productsChannel = supabase
@@ -4850,6 +4860,7 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
       });
 
       return () => {
+        clearInterval(pollInterval);
         if (supabase) {
           supabase.removeAllChannels();
         }
@@ -4857,6 +4868,10 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
     } else {
       setWatches(WATCHES);
     }
+
+    return () => {
+      clearInterval(pollInterval);
+    };
   }, [isAdmin]);
 
   // Handle logistics shipment transit alteration
@@ -5371,37 +5386,163 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
         </div>
 
         {/* Dynamic Analytics Stats Summary Bento Bar */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4 md:gap-6">
-          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Specimens Cataloged</p>
-            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
-              {watches.length} <span className="text-[10px] text-gold font-mono uppercase tracking-widest ml-1 font-semibold">Pieces</span>
-            </p>
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-4 md:gap-6">
+          
+          {/* Card 1: Products */}
+          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md relative overflow-hidden group hover:border-gold/30 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Products (Specimens)</p>
+              <div className="text-neutral-700 group-hover:text-gold/30 transition-colors">
+                <ShoppingBag size={14} />
+              </div>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1">
+              {isProductsLoading && watches.length === 0 ? (
+                <div className="h-8 w-2/3 bg-neutral-800/40 animate-pulse rounded mt-1" />
+              ) : (
+                <p className="text-2xl md:text-3xl font-serif font-bold text-white select-none">
+                  {watches.length}
+                  <span className="text-[10px] text-gold font-mono uppercase tracking-widest ml-1.5 font-bold">Pieces</span>
+                </p>
+              )}
+            </div>
+            {isProductsLoading && (
+              <span className="absolute top-4 right-8 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-gold opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-gold"></span>
+              </span>
+            )}
           </div>
-          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Estimated Assets</p>
-            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1 select-none">
-              {getFormattedPrice(watches.reduce((acc, curr) => acc + (curr.price || 0), 0))}
-            </p>
+
+          {/* Card 2: Profiles */}
+          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md relative overflow-hidden group hover:border-blue-500/30 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Client Profiles</p>
+              <div className="text-neutral-700 group-hover:text-blue-500/30 transition-colors">
+                <User size={14} />
+              </div>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1">
+              {isProfilesLoading && profiles.length === 0 ? (
+                <div className="h-8 w-2/3 bg-neutral-800/40 animate-pulse rounded mt-1" />
+              ) : (
+                <p className="text-2xl md:text-3xl font-serif font-bold text-white select-none">
+                  {profiles.length}
+                  <span className="text-[10px] text-blue-400 font-mono uppercase tracking-widest ml-1.5 font-bold">Users</span>
+                </p>
+              )}
+            </div>
+            {isProfilesLoading && (
+              <span className="absolute top-4 right-8 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-400"></span>
+              </span>
+            )}
           </div>
-          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Logistics Shipments</p>
-            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
-              {orders.length} <span className="text-[10px] text-blue-400 font-mono uppercase tracking-widest ml-1 font-semibold">Orders</span>
-            </p>
+
+          {/* Card 3: Newsletter Subscribers */}
+          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md relative overflow-hidden group hover:border-amber-500/30 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Subscribers</p>
+              <div className="text-neutral-700 group-hover:text-amber-500/30 transition-colors">
+                <Mail size={14} />
+              </div>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1">
+              {isSubscribersLoading && subscribers.length === 0 ? (
+                <div className="h-8 w-2/3 bg-neutral-800/40 animate-pulse rounded mt-1" />
+              ) : (
+                <p className="text-2xl md:text-3xl font-serif font-bold text-white select-none">
+                  {subscribers.length}
+                  <span className="text-[10px] text-amber-400 font-mono uppercase tracking-widest ml-1.5 font-bold">Emails</span>
+                </p>
+              )}
+            </div>
+            {isSubscribersLoading && (
+              <span className="absolute top-4 right-8 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-amber-400"></span>
+              </span>
+            )}
           </div>
-          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Active Subscribers</p>
-            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
-              {subscribers.length} <span className="text-[10px] text-amber-400 font-mono uppercase tracking-widest ml-1 font-semibold">Emails</span>
-            </p>
+
+          {/* Card 4: Wishlist */}
+          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md relative overflow-hidden group hover:border-red-500/30 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Wishlist Saves</p>
+              <div className="text-neutral-700 group-hover:text-red-500/30 transition-colors">
+                <Heart size={14} />
+              </div>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1">
+              {isWishlistsLoading && wishlists.length === 0 ? (
+                <div className="h-8 w-2/3 bg-neutral-800/40 animate-pulse rounded mt-1" />
+              ) : (
+                <p className="text-2xl md:text-3xl font-serif font-bold text-white select-none">
+                  {wishlists.length}
+                  <span className="text-[10px] text-red-400 font-mono uppercase tracking-widest ml-1.5 font-bold">Items</span>
+                </p>
+              )}
+            </div>
+            {isWishlistsLoading && (
+              <span className="absolute top-4 right-8 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-400"></span>
+              </span>
+            )}
           </div>
-          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md col-span-2 md:col-span-1">
-            <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Engagement State</p>
-            <p className="text-2xl md:text-3xl font-serif font-bold text-white mt-1">
-              {wishlists.length} / {carts.length} <span className="text-[9px] text-emerald-400 font-mono uppercase tracking-widest ml-1 font-bold">W & C</span>
-            </p>
+
+          {/* Card 5: Cart Items */}
+          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md relative overflow-hidden group hover:border-emerald-500/30 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Shopping Carts</p>
+              <div className="text-neutral-700 group-hover:text-emerald-500/30 transition-colors">
+                <ShoppingBag size={14} />
+              </div>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1">
+              {isCartsLoading && carts.length === 0 ? (
+                <div className="h-8 w-2/3 bg-neutral-800/40 animate-pulse rounded mt-1" />
+              ) : (
+                <p className="text-2xl md:text-3xl font-serif font-bold text-white select-none">
+                  {carts.length}
+                  <span className="text-[10px] text-emerald-400 font-mono uppercase tracking-widest ml-1.5 font-bold">Items</span>
+                </p>
+              )}
+            </div>
+            {isCartsLoading && (
+              <span className="absolute top-4 right-8 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-400"></span>
+              </span>
+            )}
           </div>
+
+          {/* Card 6: Estimated Assets / Total Valuation */}
+          <div className="bg-neutral-900/20 border border-neutral-850 p-5 rounded-2xl backdrop-blur-md relative overflow-hidden group hover:border-gold/30 transition-all duration-300">
+            <div className="flex justify-between items-start">
+              <p className="text-[10px] font-mono text-neutral-500 uppercase tracking-widest font-bold">Catalog Assets</p>
+              <div className="text-neutral-700 group-hover:text-yellow-500/30 transition-colors">
+                <CreditCard size={14} />
+              </div>
+            </div>
+            <div className="mt-2 flex items-baseline gap-1">
+              {isProductsLoading && watches.length === 0 ? (
+                <div className="h-8 w-2/3 bg-neutral-800/40 animate-pulse rounded mt-1" />
+              ) : (
+                <p className="text-xl md:text-2xl font-serif font-bold text-white select-none">
+                  {getFormattedPrice(watches.reduce((acc, curr) => acc + (curr.price || 0), 0))}
+                </p>
+              )}
+            </div>
+            {isProductsLoading && (
+              <span className="absolute top-4 right-8 flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-gold opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-gold"></span>
+              </span>
+            )}
+          </div>
+
         </div>
 
         {/* Product Specimen Mutator Form (Add/Edit specimen fields) */}
