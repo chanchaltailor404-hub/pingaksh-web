@@ -227,39 +227,15 @@ export const getSupabaseProfile = async (uid: string): Promise<SupabaseProfile |
 };
 
 // 3. Dynamic Schema / Table Detections for Maximum Resilience
-let cachedCartTable: "cart" | "cart_items" | null = null;
-let cachedWishlistTable: "wishlist" | "wishlists" | null = null;
+let cachedCartTable: "cart" | "cart_items" | null = "cart";
+let cachedWishlistTable: "wishlist" | "wishlists" | null = "wishlist";
 
 export async function getCartTableName(): Promise<"cart" | "cart_items"> {
-  if (cachedCartTable) return cachedCartTable;
-  if (!supabase) return "cart";
-  try {
-    const { error } = await supabase.from("cart").select("product_id").limit(1);
-    if (!error || error.code !== "42P01") {
-      cachedCartTable = "cart";
-      return "cart";
-    }
-  } catch {
-    // Fall back to cart_items if error
-  }
-  cachedCartTable = "cart_items";
-  return "cart_items";
+  return "cart";
 }
 
 export async function getWishlistTableName(): Promise<"wishlist" | "wishlists"> {
-  if (cachedWishlistTable) return cachedWishlistTable;
-  if (!supabase) return "wishlist";
-  try {
-    const { error } = await supabase.from("wishlist").select("product_id").limit(1);
-    if (!error || error.code !== "42P01") {
-      cachedWishlistTable = "wishlist";
-      return "wishlist";
-    }
-  } catch {
-    // Fall back to wishlists if error
-  }
-  cachedWishlistTable = "wishlists";
-  return "wishlists";
+  return "wishlist";
 }
 
 // 4. Persistent Cart Items Database Sync with Dynamic Table Detection & Robust Upserts
@@ -443,17 +419,37 @@ async function processOrderItems(orderId: string, items: { name: string; price: 
 export const getSupabaseOrders = async (userId: string): Promise<SupabaseOrder[]> => {
   if (!supabase) return [];
   try {
-    const { data, error } = await supabase
+    console.log(`[Supabase Orders] Fetching orders for user ${userId} without join...`);
+    const { data: orders, error: ordersError } = await supabase
       .from("orders")
-      .select("*, order_items(*)")
+      .select("*")
       .eq("user_id", userId)
       .order("created_at", { ascending: false });
 
-    if (error) {
-      console.error("[Supabase Orders] Error retrieving user orders from database:", error);
+    if (ordersError) {
+      console.error("[Supabase Orders] Error retrieving user orders from database:", ordersError);
       return [];
     }
-    return data || [];
+
+    if (!orders || orders.length === 0) {
+      return [];
+    }
+
+    const orderIds = orders.map((o: any) => o.id);
+    console.log(`[Supabase Orders] Found ${orders.length} orders. Fetching related items...`);
+    const { data: items, error: itemsError } = await supabase
+      .from("order_items")
+      .select("*")
+      .in("order_id", orderIds);
+
+    if (itemsError) {
+      console.warn("[Supabase Orders] Failed to query related order_items table:", itemsError);
+    }
+
+    return orders.map((order: any) => ({
+      ...order,
+      order_items: (items || []).filter((item: any) => item.order_id === order.id)
+    }));
   } catch (err) {
     console.error("[Supabase Orders Exception] getSupabaseOrders:", err);
     return [];
@@ -464,16 +460,36 @@ export const getSupabaseOrders = async (userId: string): Promise<SupabaseOrder[]
 export const getSupabaseAllOrders = async (): Promise<SupabaseOrder[]> => {
   if (!supabase) return [];
   try {
-    const { data, error } = await supabase
+    console.log("[Supabase Admin Orders] Fetching all orders without join...");
+    const { data: orders, error: ordersError } = await supabase
       .from("orders")
-      .select("*, order_items(*)")
+      .select("*")
       .order("created_at", { ascending: false });
 
-    if (error) {
-      console.error("[Supabase Admin Orders] Error retrieving all orders from Supabase:", error);
+    if (ordersError) {
+      console.error("[Supabase Admin Orders] Error retrieving all orders from Supabase:", ordersError);
       return [];
     }
-    return data || [];
+
+    if (!orders || orders.length === 0) {
+      return [];
+    }
+
+    const orderIds = orders.map((o: any) => o.id);
+    console.log(`[Supabase Admin Orders] Found ${orders.length} orders. Fetching related items...`);
+    const { data: items, error: itemsError } = await supabase
+      .from("order_items")
+      .select("*")
+      .in("order_id", orderIds);
+
+    if (itemsError) {
+      console.warn("[Supabase Admin Orders] Failed to query related order_items table:", itemsError);
+    }
+
+    return orders.map((order: any) => ({
+      ...order,
+      order_items: (items || []).filter((item: any) => item.order_id === order.id)
+    }));
   } catch (err) {
     console.error("[Supabase Admin Orders Exception] getSupabaseAllOrders:", err);
     return [];
@@ -1011,62 +1027,20 @@ export const getSupabaseAllProfiles = async (): Promise<SupabaseProfile[]> => {
 export const getSupabaseAllWishlists = async (): Promise<any[]> => {
   if (!supabase) return [];
   try {
-    let finalData: any[] = [];
-    let successCount = 0;
-    const errors: any[] = [];
+    console.log("[Supabase Admin Analytics Debug] Fetching admin wishlist records from table: wishlist");
 
-    console.log("[Supabase Admin Analytics Debug] Starting parallel fetch for admin wishlist records...");
+    const { data, error } = await supabase
+      .from("wishlist")
+      .select("*");
 
-    // Try 'wishlist' (singular) table
-    try {
-      const { data, error } = await supabase.from("wishlist").select("*");
-      if (error) {
-        errors.push({ table: "wishlist", code: error.code, message: error.message });
-        console.warn("[Supabase Admin Analytics Debug] Failed querying 'wishlist' (singular) table:", error);
-      } else {
-        successCount++;
-        console.log(`[Supabase Admin Analytics Debug] 'wishlist' (singular) query succeeded. Rows found: ${data?.length || 0}`);
-        const list = data || [];
-        for (const item of list) {
-          finalData.push(item);
-        }
-      }
-    } catch (e: any) {
-      errors.push({ table: "wishlist", exception: e?.message || e });
-      console.error("[Supabase Admin Analytics Debug] Exception on 'wishlist' query:", e);
-    }
-
-    // Try 'wishlists' (plural) table
-    try {
-      const { data, error } = await supabase.from("wishlists").select("*");
-      if (error) {
-        errors.push({ table: "wishlists", code: error.code, message: error.message });
-        console.warn("[Supabase Admin Analytics Debug] Failed querying 'wishlists' (plural) table:", error);
-      } else {
-        successCount++;
-        console.log(`[Supabase Admin Analytics Debug] 'wishlists' (plural) query succeeded. Rows found: ${data?.length || 0}`);
-        const existingKeys = new Set(finalData.map(item => `${item.user_id}-${item.product_id}`));
-        const list = data || [];
-        for (const item of list) {
-          const key = `${item.user_id}-${item.product_id}`;
-          if (!existingKeys.has(key)) {
-            finalData.push(item);
-            existingKeys.add(key);
-          }
-        }
-      }
-    } catch (e: any) {
-      errors.push({ table: "wishlists", exception: e?.message || e });
-      console.error("[Supabase Admin Analytics Debug] Exception on 'wishlists' query:", e);
-    }
-
-    if (successCount === 0) {
-      console.error("[Supabase Admin Analytics Debug] BOTH wishlist tables failed to resolve. Error log details:", errors);
+    if (error) {
+      console.error("[Supabase Admin Analytics Debug] Failed querying 'wishlist' table:", error);
       return [];
     }
 
-    console.log(`[Supabase Admin Wishlists] Successfully finished. Registered total size: ${finalData.length} records across successfully resolved table(s).`);
-    return finalData;
+    const count = data?.length || 0;
+    console.log(`[Supabase Admin Analytics Debug] SUCCESS: 'wishlist' query resolved. Count of rows returned: ${count}`);
+    return data || [];
   } catch (err) {
     console.error("[Supabase Admin Wishlists Exception] getSupabaseAllWishlists failed completely:", err);
     return [];
@@ -1077,62 +1051,20 @@ export const getSupabaseAllWishlists = async (): Promise<any[]> => {
 export const getSupabaseAllCartItems = async (): Promise<any[]> => {
   if (!supabase) return [];
   try {
-    let finalData: any[] = [];
-    let successCount = 0;
-    const errors: any[] = [];
+    console.log("[Supabase Admin Analytics Debug] Fetching admin cart records from table: cart");
 
-    console.log("[Supabase Admin Analytics Debug] Starting parallel fetch for admin cart records...");
+    const { data, error } = await supabase
+      .from("cart")
+      .select("*");
 
-    // Try 'cart_items' (plural default) table
-    try {
-      const { data, error } = await supabase.from("cart_items").select("*");
-      if (error) {
-        errors.push({ table: "cart_items", code: error.code, message: error.message });
-        console.warn("[Supabase Admin Analytics Debug] Failed querying 'cart_items' table:", error);
-      } else {
-        successCount++;
-        console.log(`[Supabase Admin Analytics Debug] 'cart_items' query succeeded. Rows found: ${data?.length || 0}`);
-        const list = data || [];
-        for (const item of list) {
-          finalData.push(item);
-        }
-      }
-    } catch (e: any) {
-      errors.push({ table: "cart_items", exception: e?.message || e });
-      console.error("[Supabase Admin Analytics Debug] Exception on 'cart_items' query:", e);
-    }
-
-    // Try 'cart' (singular) table
-    try {
-      const { data, error } = await supabase.from("cart").select("*");
-      if (error) {
-        errors.push({ table: "cart", code: error.code, message: error.message });
-        console.warn("[Supabase Admin Analytics Debug] Failed querying 'cart' table:", error);
-      } else {
-        successCount++;
-        console.log(`[Supabase Admin Analytics Debug] 'cart' query succeeded. Rows found: ${data?.length || 0}`);
-        const existingKeys = new Set(finalData.map(item => `${item.user_id}-${item.product_id}`));
-        const list = data || [];
-        for (const item of list) {
-          const key = `${item.user_id}-${item.product_id}`;
-          if (!existingKeys.has(key)) {
-            finalData.push(item);
-            existingKeys.add(key);
-          }
-        }
-      }
-    } catch (e: any) {
-      errors.push({ table: "cart", exception: e?.message || e });
-      console.error("[Supabase Admin Analytics Debug] Exception on 'cart' query:", e);
-    }
-
-    if (successCount === 0) {
-      console.error("[Supabase Admin Analytics Debug] BOTH cart tables failed to resolve. Error log details:", errors);
+    if (error) {
+      console.error("[Supabase Admin Analytics Debug] Failed querying 'cart' table:", error);
       return [];
     }
 
-    console.log(`[Supabase Admin Carts] Successfully finished. Registered total size: ${finalData.length} records across successfully resolved table(s).`);
-    return finalData;
+    const count = data?.length || 0;
+    console.log(`[Supabase Admin Analytics Debug] SUCCESS: 'cart' query resolved. Count of rows returned: ${count}`);
+    return data || [];
   } catch (err) {
     console.error("[Supabase Admin Carts Exception] getSupabaseAllCartItems failed completely:", err);
     return [];

@@ -4931,9 +4931,9 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
         )
         .subscribe();
 
-      // Setup dynamic table listeners for Wishlist and Cart
+      // Setup single table listeners for Wishlist and Cart
       if (supabase) {
-        // Highly resilient dual-table listener registrations for wishlist schemas
+        // Real-time listener registration for wishlist table
         supabase
           .channel("admin-realtime-wishlist-generic")
           .on(
@@ -4945,34 +4945,12 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
           )
           .subscribe();
 
-        supabase
-          .channel("admin-realtime-wishlists-plural")
-          .on(
-            "postgres_changes",
-            { event: "*", schema: "public", table: "wishlists" },
-            () => {
-              loadAdminWishlists(true);
-            }
-          )
-          .subscribe();
-
-        // Highly resilient dual-table listener registrations for cart schemas
+        // Real-time listener registration for cart table
         supabase
           .channel("admin-realtime-cart-generic")
           .on(
             "postgres_changes",
             { event: "*", schema: "public", table: "cart" },
-            () => {
-              loadAdminCarts(true);
-            }
-          )
-          .subscribe();
-
-        supabase
-          .channel("admin-realtime-cart_items-schema")
-          .on(
-            "postgres_changes",
-            { event: "*", schema: "public", table: "cart_items" },
             () => {
               loadAdminCarts(true);
             }
