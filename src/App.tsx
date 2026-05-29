@@ -4772,6 +4772,10 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
   // Active luxury dashboard navigation tab switcher
   const [activeTab, setActiveTab] = useState<"products" | "orders" | "subscribers" | "wishlists" | "carts">("products");
 
+  // Orders Search and Filtering state for Admin Orders Management
+  const [orderSearch, setOrderSearch] = useState("");
+  const [orderStatusFilter, setOrderStatusFilter] = useState("all");
+
   // Custom interactive toast notifications array
   const [toasts, setToasts] = useState<{ id: string; type: "success" | "error" | "info"; message: string }[]>([]);
 
@@ -6021,107 +6025,521 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
           </div>
         )}
 
-        {/* --- 2. ORDERS DELIVERIES TAB VIEW --- */}
-        {activeTab === "orders" && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
-                <span className="w-1.5 h-6 bg-gold rounded-full inline-block" />
-                Transit Logistics & Delivery Schedules
-              </h2>
-              <p className="text-xs text-neutral-400 mt-1">Alter current shipment status and transport logistics matrices in real time.</p>
-            </div>
+                      {/* --- 2. ORDERS DELIVERIES TAB VIEW --- */}
+        {activeTab === "orders" && (() => {
+          // Define local computation for orders filtering & searching within an immediately invoked function expression (IIFE)
+          const filteredOrders = orders.filter((ord: any) => {
+            // 1. Status Filter
+            const rawStatus = (ord.order_status || ord.status || "Pending").trim().toLowerCase();
+            
+            if (orderStatusFilter !== "all") {
+              if (orderStatusFilter === "pending" && rawStatus !== "pending") return false;
+              if (orderStatusFilter === "processing" && rawStatus !== "processing" && rawStatus !== "calibrating") return false;
+              if (orderStatusFilter === "shipped" && rawStatus !== "shipped" && rawStatus !== "transit" && rawStatus !== "shipped and tracking") return false;
+              if (orderStatusFilter === "out for delivery" && rawStatus !== "out for delivery" && rawStatus !== "customs" && rawStatus !== "custom") return false;
+              if (orderStatusFilter === "delivered" && rawStatus !== "delivered" && rawStatus !== "fulfilled" && rawStatus !== "success" && rawStatus !== "completed") return false;
+              if (orderStatusFilter === "cancelled" && rawStatus !== "cancelled") return false;
+            }
 
-            {isOrdersLoading ? (
-              <div className="border border-neutral-800 rounded-2xl p-8 bg-neutral-900/10 space-y-4 animate-pulse">
-                <div className="h-6 bg-neutral-850 rounded w-1/4" />
-                <div className="h-12 bg-neutral-850 rounded w-full" />
-                <div className="h-12 bg-neutral-850 rounded w-full" />
+            // 2. Search Query (OrderStatus, Name, Email, Order ID, Product Name, Phone)
+            if (orderSearch.trim()) {
+              const q = orderSearch.toLowerCase();
+              const idMatches = ord.id.toLowerCase().includes(q);
+              const nameMatches = (ord.shipping_name || "").toLowerCase().includes(q);
+              const emailMatches = (ord.customer_email || "").toLowerCase().includes(q);
+              const phoneMatches = (ord.customer_phone || "").toLowerCase().includes(q);
+              const productMatches = ord.order_items?.some((it: any) => it.product_name.toLowerCase().includes(q)) || false;
+
+              if (!idMatches && !nameMatches && !emailMatches && !phoneMatches && !productMatches) {
+                return false;
+              }
+            }
+
+            return true;
+          });
+
+          const getOrderStatusCount = (statusType: string) => {
+            return orders.filter((ord: any) => {
+              const rawStatus = (ord.order_status || ord.status || "Pending").trim().toLowerCase();
+              if (statusType === "all") return true;
+              if (statusType === "pending" && rawStatus === "pending") return true;
+              if (statusType === "processing" && (rawStatus === "processing" || rawStatus === "calibrating")) return true;
+              if (statusType === "shipped" && (rawStatus === "shipped" || rawStatus === "transit" || rawStatus === "shipped and tracking")) return true;
+              if (statusType === "out for delivery" && (rawStatus === "out for delivery" || rawStatus === "customs" || rawStatus === "custom")) return true;
+              if (statusType === "delivered" && (rawStatus === "delivered" || rawStatus === "fulfilled" || rawStatus === "success" || rawStatus === "completed")) return true;
+              if (statusType === "cancelled" && rawStatus === "cancelled") return true;
+              return false;
+            }).length;
+          };
+
+          const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
+          const activeOrdersCount = orders.filter(o => {
+            const rawStatus = (o.order_status || o.status || "Pending").trim().toLowerCase();
+            return rawStatus !== "delivered" && rawStatus !== "fulfilled" && rawStatus !== "cancelled";
+          }).length;
+
+          // Estimated Delivery Time (Order Date + 5 calendar days)
+          const getEstimatedDeliveryString = (createdAt?: string) => {
+            const dateObj = createdAt ? new Date(createdAt) : new Date();
+            const estDate = new Date(dateObj.getTime() + 5 * 24 * 60 * 60 * 1000);
+            return estDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+          };
+
+          return (
+            <div className="space-y-6">
+              {/* Premium Luxury Admin Title Section */}
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-neutral-900 pb-5">
+                <div>
+                  <h2 className="text-xl font-serif font-bold text-white flex items-center gap-2">
+                    <span className="w-1.5 h-6 bg-gold rounded-full inline-block animate-pulse" />
+                    Pingaksh Order Registry & Transit Logistics
+                  </h2>
+                  <p className="text-xs text-neutral-400 mt-1">
+                    Meticulously audit customer acquisitions, dispatch logistics vectors, and calibrate horological delivery timelines in real-time.
+                  </p>
+                </div>
+                <button
+                  onClick={() => loadAdminOrders()}
+                  className="bg-neutral-950 hover:bg-neutral-900 text-gold text-[10px] font-mono tracking-widest px-3.5 py-2 rounded-lg border border-neutral-850 hover:border-gold/30 transition-all cursor-pointer flex items-center gap-2"
+                >
+                  <span className={`${isOrdersLoading ? "animate-spin inline-block w-2.5 h-2.5 border-t border-gold rounded-full" : ""}`} />
+                  SYNCHRONIZE REGISTRY
+                </button>
               </div>
-            ) : orders.length === 0 ? (
-              <div className="border border-neutral-850 rounded-2xl p-10 text-center bg-neutral-900/10">
-                <p className="text-neutral-500 font-serif italic">No shipment operations logged inside the logistics files.</p>
+
+              {/* Status Metrics Counters Panel */}
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5">
+                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
+                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Total Transactions</span>
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xl font-serif font-bold text-white">{orders.length}</span>
+                    <span className="text-[9px] font-mono text-neutral-400">Ledger entries</span>
+                  </div>
+                </div>
+
+                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
+                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Active Logistics</span>
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xl font-serif font-bold text-gold">{activeOrdersCount}</span>
+                    <span className="text-[9px] font-mono text-gold bg-gold/10 px-1 py-0.5 rounded border border-gold/15">Awaiting Handoff</span>
+                  </div>
+                </div>
+
+                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
+                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Completed Handoffs</span>
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xl font-serif font-bold text-emerald-400">{getOrderStatusCount("delivered")}</span>
+                    <span className="text-[9px] font-mono text-emerald-500 bg-emerald-950/30 px-1 py-0.5 rounded border border-emerald-900/10">Delivered</span>
+                  </div>
+                </div>
+
+                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
+                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Total Book Value</span>
+                  <div className="flex justify-between items-baseline col-span-2 md:col-span-1">
+                    <span className="text-lg font-serif font-bold text-gold font-mono">{getFormattedPrice(totalRevenue)}</span>
+                    <span className="text-[8px] font-mono text-neutral-400">System Valuation</span>
+                  </div>
+                </div>
+
+                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors col-span-2 lg:col-span-1">
+                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Suspended Files</span>
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xl font-serif font-bold text-red-400">{getOrderStatusCount("cancelled")}</span>
+                    <span className="text-[9px] font-mono text-red-500 bg-red-950/20 px-1 py-0.5 rounded border border-red-900/25">Cancelled</span>
+                  </div>
+                </div>
               </div>
-            ) : (
-              <div className="overflow-x-auto bg-neutral-900/20 border border-neutral-800 rounded-xl">
-                <table className="w-full text-left border-collapse text-xs text-neutral-300">
-                  <thead>
-                    <tr className="border-b border-neutral-850 text-neutral-400 font-mono text-[9px] uppercase tracking-widest bg-neutral-950/40">
-                      <th className="py-4 px-4 font-bold">Logistics Code</th>
-                      <th className="py-4 px-4 font-bold">Consignee Address</th>
-                      <th className="py-4 px-4 font-bold">Valuation</th>
-                      <th className="py-4 px-4 font-bold">Transit Status Indicator</th>
-                      <th className="py-4 px-4 font-bold">Phase Transition</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-900/40 font-sans">
-                    {orders.map((ord: any) => (
-                      <tr key={ord.id} className="hover:bg-neutral-900/20">
-                        <td className="py-4 px-4 font-mono font-bold text-gold">
-                          {ord.id.substring(0, 8).toUpperCase()}
-                        </td>
-                        <td className="py-2.5 px-4 font-sans leading-relaxed">
-                          <div className="font-semibold text-neutral-200">
-                            {ord.shipping_name || "Client"} 
-                            <span className="text-neutral-400 font-normal ml-1.5">({ord.customer_email})</span>
-                          </div>
-                          {ord.customer_phone && (
-                            <div className="text-[11px] text-neutral-350 font-mono mt-0.5">📞 {ord.customer_phone}</div>
-                          )}
-                          
-                          {(ord.shipping_address || ord.shipping_city || ord.shipping_state || ord.shipping_zip) ? (
-                            <div className="text-neutral-400 text-[10.5px] bg-[#0c0c0c] border border-neutral-850 p-2 rounded-lg mt-1.5 max-w-sm leading-normal">
-                              <p className="text-neutral-200 font-medium">{ord.shipping_address}</p>
-                              <p className="mt-0.5 text-neutral-450">{ord.shipping_city}, {ord.shipping_state} - {ord.shipping_zip}</p>
-                            </div>
-                          ) : (
-                            <div className="text-neutral-500 text-[10px] italic">No shipping address recorded</div>
-                          )}
-                          
-                          <div className="flex gap-2 items-center mt-2 font-mono text-[9px] uppercase tracking-wider">
-                            <span className="text-neutral-500">Date: {ord.created_at ? new Date(ord.created_at).toLocaleDateString() : ""}</span>
-                            {ord.payment_method && (
-                              <span className={`px-1.5 py-0.5 rounded font-bold border ${ord.payment_method === 'COD' ? 'bg-gold/10 text-gold border-gold/20' : 'bg-blue-950/20 text-blue-400 border-blue-900/30'}`}>
-                                {ord.payment_method === 'COD' ? 'Cash on Delivery (COD)' : ord.payment_method}
+
+              {/* Advanced Search & Filtering Console */}
+              <div className="bg-neutral-950 p-4 border border-neutral-900/80 rounded-xl space-y-4">
+                <div className="flex flex-col md:flex-row gap-3">
+                  <div className="relative flex-1">
+                    <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-neutral-500">
+                      <Search size={15} />
+                    </div>
+                    <input
+                      type="text"
+                      placeholder="Audit by Order ID, Customer Name, Email, Phone, or Timepieces..."
+                      value={orderSearch}
+                      onChange={(e) => setOrderSearch(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-850 rounded-lg py-2.5 pl-10 pr-4 text-xs text-white focus:outline-none focus:border-gold transition-colors font-sans placeholder-neutral-500"
+                    />
+                    {orderSearch && (
+                      <button
+                        onClick={() => setOrderSearch("")}
+                        className="absolute inset-y-0 right-3 flex items-center text-neutral-500 hover:text-white text-xs cursor-pointer"
+                        title="Clear filter query"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono uppercase text-neutral-500 tracking-wider hidden lg:inline">Quick Phase:</span>
+                    <select
+                      value={orderStatusFilter}
+                      onChange={(e) => setOrderStatusFilter(e.target.value)}
+                      className="bg-neutral-900 border border-neutral-850 rounded-lg px-3 py-2.5 text-xs text-neutral-300 font-mono focus:outline-none focus:border-gold cursor-pointer"
+                    >
+                      <option value="all">All Status Registers ({orders.length})</option>
+                      <option value="pending">1. Pending ({getOrderStatusCount("pending")})</option>
+                      <option value="processing">2. Processing ({getOrderStatusCount("processing")})</option>
+                      <option value="shipped">3. Shipped ({getOrderStatusCount("shipped")})</option>
+                      <option value="out for delivery">4. Out for Delivery ({getOrderStatusCount("out for delivery")})</option>
+                      <option value="delivered">5. Delivered ({getOrderStatusCount("delivered")})</option>
+                      <option value="cancelled">X. Cancelled ({getOrderStatusCount("cancelled")})</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Horizontal Filter Pill Tabs */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-neutral-900">
+                  <span className="text-[9px] font-mono uppercase text-neutral-500 tracking-widest mr-2 select-none">Calibrated Filter:</span>
+                  
+                  {[
+                    { id: "all", label: "Archive Full Feed", count: orders.length },
+                    { id: "pending", label: "Pending", count: getOrderStatusCount("pending") },
+                    { id: "processing", label: "Processing", count: getOrderStatusCount("processing") },
+                    { id: "shipped", label: "Shipped", count: getOrderStatusCount("shipped") },
+                    { id: "out for delivery", label: "Out for Delivery", count: getOrderStatusCount("out for delivery") },
+                    { id: "delivered", label: "Delivered", count: getOrderStatusCount("delivered") },
+                    { id: "cancelled", label: "Cancelled", count: getOrderStatusCount("cancelled") }
+                  ].map((pill) => {
+                    const isSelected = orderStatusFilter === pill.id;
+                    return (
+                      <button
+                        key={pill.id}
+                        onClick={() => setOrderStatusFilter(pill.id)}
+                        className={`px-3 py-1.5 rounded-full text-[10px] font-mono tracking-wide transition-all cursor-pointer flex items-center gap-1.5 border select-none ${
+                          isSelected 
+                            ? "bg-gold/15 text-gold border-gold/30 font-bold" 
+                            : "bg-neutral-900 text-neutral-400 border-transparent hover:border-neutral-800 hover:text-white"
+                        }`}
+                      >
+                        {pill.label}
+                        <span className={`px-1.5 py-0.25 rounded-full text-[8px] font-bold ${
+                          isSelected ? "bg-white text-black" : "bg-neutral-800 text-neutral-500"
+                        }`}>
+                          {pill.count}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Main Active Orders Interactive Board */}
+              {isOrdersLoading ? (
+                <div className="space-y-4 py-4">
+                  {[1, 2, 3].map((shimmer) => (
+                    <div key={shimmer} className="border border-neutral-900 rounded-2xl p-6 bg-neutral-950/40 space-y-4 animate-pulse">
+                      <div className="flex justify-between items-center">
+                        <div className="h-5 bg-neutral-900 rounded w-1/4" />
+                        <div className="h-4 bg-neutral-900 rounded w-1/6" />
+                      </div>
+                      <div className="h-[1px] bg-neutral-900 rounded w-full" />
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <div className="h-4 bg-neutral-900 rounded w-1/3" />
+                          <div className="h-3 bg-neutral-900 rounded w-1/2" />
+                        </div>
+                        <div className="h-10 bg-neutral-900 rounded w-full" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : filteredOrders.length === 0 ? (
+                <div className="border border-neutral-900 rounded-2xl p-12 text-center bg-neutral-955 space-y-4">
+                  <div className="w-14 h-14 bg-neutral-900 text-neutral-550 rounded-full flex items-center justify-center mx-auto border border-neutral-850">
+                    <ShoppingBag size={22} />
+                  </div>
+                  <div className="space-y-1 text-center">
+                    <h4 className="text-white text-sm font-serif font-bold tracking-wide">No Coordinate Records Matched</h4>
+                    <p className="text-neutral-500 text-[11px] max-w-md mx-auto leading-relaxed">
+                      No customer orders comply with the active search parameters or state filter inside this registry node.
+                    </p>
+                  </div>
+                  {(orderSearch.trim() || orderStatusFilter !== "all") && (
+                    <button
+                      onClick={() => {
+                        setOrderSearch("");
+                        setOrderStatusFilter("all");
+                      }}
+                      className="bg-neutral-900 hover:bg-neutral-850 text-gold text-[10px] font-mono tracking-widest px-5 py-2.5 rounded border border-neutral-800 hover:border-gold/30 transition-colors cursor-pointer"
+                    >
+                      RESET AUDIT FILTERS
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-5">
+                  {filteredOrders.map((ord: any) => {
+                    const rawStatus = (ord.order_status || ord.status || "Pending").trim().toLowerCase();
+                    const formattedId = ord.id.substring(0, 8).toUpperCase();
+                    
+                    let activeIndex = 0;
+                    let isCancelled = false;
+                    if (rawStatus === "pending") {
+                      activeIndex = 0;
+                    } else if (rawStatus === "processing" || rawStatus === "calibrating") {
+                      activeIndex = 1;
+                    } else if (rawStatus === "shipped" || rawStatus === "transit" || rawStatus === "shipped and tracking") {
+                      activeIndex = 2;
+                    } else if (rawStatus === "out for delivery" || rawStatus === "customs" || rawStatus === "custom") {
+                      activeIndex = 3;
+                    } else if (rawStatus === "delivered" || rawStatus === "fulfilled" || rawStatus === "success" || rawStatus === "completed") {
+                      activeIndex = 4;
+                    } else if (rawStatus === "cancelled") {
+                      isCancelled = true;
+                      activeIndex = -1;
+                    }
+
+                    // Total number of discrete items 
+                    const totalQty = ord.order_items ? ord.order_items.reduce((sum: number, it: any) => sum + Number(it.quantity || 0), 0) : 0;
+
+                    return (
+                      <div 
+                        key={ord.id} 
+                        className="bg-neutral-950 border border-neutral-900 rounded-2xl p-5 md:p-6 space-y-5 hover:border-neutral-800 transition-all duration-300 relative overflow-hidden group"
+                      >
+                        {/* Subtle premium corner tint depending on status */}
+                        <div className={`absolute top-0 right-0 w-24 h-24 rounded-full blur-2xl pointer-events-none opacity-20 transition-all group-hover:opacity-30 ${
+                          isCancelled ? "bg-red-500" :
+                          activeIndex === 4 ? "bg-emerald-500" :
+                          activeIndex === 0 ? "bg-white" :
+                          "bg-gold"
+                        }`} />
+
+                        {/* Order Upper Meta Block */}
+                        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-neutral-900/60 pb-4 relative z-10">
+                          <div className="space-y-1.5">
+                            <div className="flex flex-wrap items-center gap-2.5">
+                              <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">ACQUISITION ID</span>
+                              <span className="text-neutral-300 font-mono text-[9px] bg-neutral-900 px-2 py-0.5 rounded border border-neutral-850">
+                                FULL KEY ({ord.id})
                               </span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-white text-base font-serif font-bold tracking-wide">#{formattedId}</span>
+                              <span className={`px-2.5 py-0.5 rounded-full font-mono text-[8px] uppercase tracking-wider font-bold border flex items-center gap-1.5 select-none ${
+                                isCancelled ? "bg-red-950/60 text-red-400 border-red-900/40" :
+                                activeIndex === 4 ? "bg-emerald-950/60 text-emerald-400 border-emerald-900/30 font-bold" :
+                                activeIndex === 0 ? "bg-stone-900 text-stone-300 border border-stone-800" :
+                                "bg-gold/15 text-gold border-gold/30 animate-pulse font-bold"
+                              }`}>
+                                <span className={`w-1 h-1 rounded-full ${
+                                  isCancelled ? "bg-red-400" :
+                                  activeIndex === 4 ? "bg-emerald-400" :
+                                  "bg-gold"
+                                }`} />
+                                {ord.order_status || ord.status || "Pending"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 md:flex md:flex-row md:items-center md:text-right gap-x-4 gap-y-2 w-full md:w-auto">
+                            <div>
+                              <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Order Timestamp</span>
+                              <span className="text-neutral-200 text-xs font-mono font-medium">{ord.created_at ? new Date(ord.created_at).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
+                            </div>
+                            <div className="md:border-l md:border-neutral-800 md:pl-4">
+                              <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Acquisition Total</span>
+                              <span className="text-gold text-sm font-mono font-bold block">{getFormattedPrice(ord.total)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Customer Information Grid & Shipment Details */}
+                        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start relative z-10">
+                          {/* Consignee credentials */}
+                          <div className="lg:col-span-4 space-y-3 font-sans">
+                            <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block mb-1">CONSIGNEE DETAILS</span>
+                            
+                            <div className="space-y-2">
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-neutral-400 font-mono w-14 shrink-0 uppercase tracking-wider text-[9px]">Name:</span>
+                                <span className="text-white font-bold">{ord.shipping_name || "Guest Client"}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-neutral-400 font-mono w-14 shrink-0 uppercase tracking-wider text-[9px]">Email:</span>
+                                <span className="text-neutral-200 font-medium select-all hover:text-gold transition-colors">{ord.customer_email || "Not recorded"}</span>
+                              </div>
+                              <div className="flex items-center gap-2 text-xs">
+                                <span className="text-neutral-400 font-mono w-14 shrink-0 uppercase tracking-wider text-[9px]">Phone:</span>
+                                <span className="text-neutral-205 font-mono select-all hover:text-gold transition-colors">{ord.customer_phone || "Not recorded"}</span>
+                              </div>
+                              <div className="flex items-start gap-2 text-xs pt-1">
+                                <span className="text-neutral-400 font-mono w-14 shrink-0 uppercase tracking-wider text-[9px] mt-0.5">Vector:</span>
+                                <div className="text-neutral-400 text-[11px] bg-neutral-900/60 border border-neutral-900 p-2.5 rounded-lg w-full leading-relaxed">
+                                  {ord.shipping_address ? (
+                                    <>
+                                      <p className="text-neutral-200 font-medium">{ord.shipping_address}</p>
+                                      <p className="text-neutral-400 mt-1">{ord.shipping_city}, {ord.shipping_state} - {ord.shipping_zip || ""}</p>
+                                    </>
+                                  ) : (
+                                    <span className="italic text-neutral-550">No delivery address recorded.</span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Order Logistics Update Actions / Logistics timeline info */}
+                          <div className="lg:col-span-5 space-y-3 border-t lg:border-t-0 lg:border-x border-neutral-900/80 pt-4 lg:pt-0 lg:px-5">
+                            <div className="flex justify-between items-center mb-1">
+                              <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">LOGISTICS TRANSIT PHASE</span>
+                              {isOperationLoading && (
+                                <span className="text-[8px] text-gold font-mono animate-pulse uppercase tracking-widest">
+                                  Securing Link...
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="space-y-4">
+                              {/* Shipment Update Input select */}
+                              <div className="space-y-1.5">
+                                <label className="text-neutral-400 text-[10px] font-mono uppercase block">Status Phase Control</label>
+                                <div className="relative">
+                                  <select
+                                    value={ord.order_status || ord.status || "Pending"}
+                                    onChange={(e) => handleUpdateStatus(ord.id, e.target.value as any)}
+                                    className="w-full bg-neutral-900 border border-neutral-800 rounded-lg py-2.5 px-3.5 text-xs text-neutral-205 font-mono focus:outline-none focus:border-gold cursor-pointer transition-colors hover:border-neutral-700"
+                                    title="Alter order transit status instantly"
+                                    disabled={isOperationLoading}
+                                  >
+                                    <option value="Pending">1. Pending</option>
+                                    <option value="Processing">2. Processing</option>
+                                    <option value="Shipped">3. Shipped</option>
+                                    <option value="Out for Delivery">4. Out for Delivery</option>
+                                    <option value="Delivered">5. Delivered</option>
+                                    <option value="Cancelled">X. Cancelled</option>
+                                  </select>
+                                </div>
+                                <p className="text-[10px] text-neutral-500 font-mono mt-1">
+                                  * Alteration triggers immediate ledger writeback & notifications update.
+                                </p>
+                              </div>
+
+                              {/* Estimated arrival display */}
+                              <div className="bg-neutral-900/40 p-3 rounded-lg border border-neutral-900 flex justify-between items-center text-xs">
+                                <div className="space-y-0.5">
+                                  <span className="text-neutral-400 text-[9px] font-mono uppercase tracking-wider block">Estimated Handoff</span>
+                                  <span className="text-white font-serif font-bold tracking-wide">
+                                    {getEstimatedDeliveryString(ord.created_at)}
+                                  </span>
+                                </div>
+                                <span className="text-[10px] font-mono text-gold bg-gold/5 px-2 py-1 rounded border border-gold/10 select-none">
+                                  5-Day Transit Flight
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Payment Method / Summary Valuation details */}
+                          <div className="lg:col-span-3 space-y-3 border-t lg:border-t-0 border-neutral-900/80 pt-4 lg:pt-0">
+                            <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block mb-1">FINANCIAL LEDGER</span>
+
+                            <div className="space-y-3.5">
+                              <div className="bg-[#0b0b0b] border border-neutral-900/80 rounded-xl p-3.5 space-y-2">
+                                <div className="flex justify-between items-center text-xs">
+                                  <span className="text-neutral-400 font-mono text-[9px] uppercase font-light">Payment Method:</span>
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border select-none leading-none ${
+                                    ord.payment_method === 'COD' 
+                                      ? 'bg-amber-950/20 text-amber-500 border-amber-900/10' 
+                                      : 'bg-emerald-950/20 text-emerald-400 border-emerald-950/40'
+                                  }`}>
+                                    {ord.payment_method === 'COD' ? 'Cash on Delivery (COD)' : (ord.payment_method || 'Online Card / Link')}
+                                  </span>
+                                </div>
+                                
+                                <div className="h-[1px] bg-neutral-900" />
+                                
+                                <div className="flex justify-between items-center text-xs">
+                                  <span className="text-neutral-400 font-mono text-[9px] uppercase font-light">Transit Quantity:</span>
+                                  <span className="text-white font-mono font-bold">{totalQty} units</span>
+                                </div>
+                              </div>
+
+                              <div className="text-center bg-neutral-900/20 border border-neutral-900/60 rounded-xl py-3 px-2">
+                                <span className="text-neutral-500 text-[8px] font-mono uppercase tracking-widest block mb-0.5">SECURE RECORD</span>
+                                <span className="text-[10px] font-mono text-gold tracking-widest uppercase font-bold animate-pulse">
+                                  ✓ PINGAKSH VERIFIED
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Ordered Products / Timepiece Specifications Details */}
+                        <div className="space-y-3 pt-4 border-t border-neutral-900/50 relative z-10">
+                          <h5 className="text-neutral-400 text-[9px] uppercase tracking-widest font-mono">
+                            AFFILIATED TIMEPIECE SPECIFICATIONS ({totalQty} specimens)
+                          </h5>
+                          
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pt-0.5">
+                            {ord.order_items && ord.order_items.length > 0 ? (
+                              ord.order_items.map((it: any) => {
+                                // Dynamic Watch lookup
+                                const imageFallback = "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
+                                const affiliatedWatch = (watches.length > 0 ? watches : WATCHES).find(w => w.name === it.product_name);
+                                const watchImage = affiliatedWatch?.image || imageFallback;
+                                const shortCategory = affiliatedWatch?.category || "Horology Classic";
+
+                                return (
+                                  <div 
+                                    key={it.id} 
+                                    className="bg-neutral-900/20 border border-neutral-900/80 p-3 rounded-xl flex items-center justify-between gap-3 text-xs hover:border-neutral-850 transition-all duration-300 relative group/watch"
+                                  >
+                                    <div className="flex items-center gap-3">
+                                      {watchImage && (
+                                        <img 
+                                          src={watchImage} 
+                                          alt={it.product_name} 
+                                          className="w-10 h-13 object-cover bg-black rounded-lg border border-neutral-850 shrink-0 select-none"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                      )}
+                                      <div className="space-y-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="font-serif text-white font-bold block hover:text-gold text-xs tracking-wide">
+                                            {it.product_name}
+                                          </span>
+                                          <span className="text-[7.5px] font-mono text-neutral-550 uppercase tracking-widest bg-neutral-950 px-1 rounded border border-neutral-900">
+                                            {shortCategory}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-2 text-[10px] font-mono text-neutral-400">
+                                          <span>Count: <strong className="text-gold">{it.quantity}</strong></span>
+                                          <span className="text-neutral-700">|</span>
+                                          <span>Unit Price: <strong>{getFormattedPrice(it.price)}</strong></span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="text-right space-y-0.5 shrink-0 pl-2">
+                                      <span className="text-[8px] font-mono text-neutral-500 uppercase block select-none">Agg Valuation</span>
+                                      <span className="text-gold font-mono font-bold">
+                                        {getFormattedPrice(it.price * it.quantity)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div className="col-span-2 text-center py-2.5 bg-neutral-900/10 border border-neutral-900/40 rounded-xl text-neutral-500 font-serif italic text-[11px]">
+                                No watch items details recorded inside this order packet.
+                              </div>
                             )}
                           </div>
-                        </td>
-                        <td className="py-4 px-4 font-semibold text-neutral-200 font-mono">
-                          {getFormattedPrice(ord.total)}
-                        </td>
-                        <td className="py-4 px-4 font-mono uppercase tracking-widest text-[9px] font-bold">
-                          <span className={`px-2.5 py-1 rounded inline-block ${
-                            (ord.order_status || ord.status) === "Cancelled" || ord.status === "cancelled" ? "bg-red-950/95 text-red-400 border border-red-900/40" :
-                            (ord.order_status || ord.status) === "Delivered" || ord.status === "fulfilled" ? "bg-emerald-950/90 text-emerald-400 border border-emerald-900/30 font-bold" :
-                            (ord.order_status || ord.status) === "Pending" ? "bg-stone-900 text-stone-300 border border-stone-800" :
-                            "bg-amber-950/90 text-amber-550 border border-amber-900/30 animate-pulse font-bold"
-                          }`}>
-                            {ord.order_status || ord.status || "Pending"}
-                          </span>
-                        </td>
-                        <td className="py-4 px-4">
-                          <select
-                            value={ord.order_status || ord.status || "Pending"}
-                            onChange={(e) => handleUpdateStatus(ord.id, e.target.value as any)}
-                            className="bg-neutral-950 border border-neutral-800 rounded px-2.5 py-1.5 focus:outline-none focus:border-gold text-xs text-neutral-300 font-mono cursor-pointer"
-                          >
-                            <option value="Pending">1. Pending</option>
-                            <option value="Processing">2. Processing</option>
-                            <option value="Shipped">3. Shipped</option>
-                            <option value="Out for Delivery">4. Out for Delivery</option>
-                            <option value="Delivered">5. Delivered</option>
-                            <option value="Cancelled">X. Cancelled</option>
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         {/* --- 3. NEWSLETTER SUBSCRIBERS TAB VIEW --- */}
         {activeTab === "subscribers" && (
