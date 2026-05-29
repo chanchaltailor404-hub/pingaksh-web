@@ -6157,14 +6157,14 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                       const wishUserId = wish.user_id ? String(wish.user_id) : "";
                       const wishPropId = wish.product_id ? String(wish.product_id) : "";
                       const profile = profiles.find(p => p.id === wish.user_id);
-                      const email = profile?.email || "Guest (" + (wishUserId ? wishUserId.substring(0, 6) : "Anon") + ")";
+                      const email = profile?.email || "Guest (" + (wishUserId ? (wishUserId.includes("-") ? wishUserId.split("-")[0] : wishUserId.substring(0, 8)) : "Anon") + ")";
                       const name = profile?.name || "Anonymous User";
-                      const matchWatch = watches.find(w => w.id === wish.product_id);
-                      const watchName = matchWatch?.name || "Premium Chronograph";
+                      const matchWatch = watches.find(w => String(w.id).toLowerCase() === wishPropId.toLowerCase());
+                      const watchName = matchWatch?.name || `Product Specimen (${wishPropId ? (wishPropId.includes("-") ? wishPropId.split("-")[0] : wishPropId.substring(0, 8)) : "N/A"})`;
                       const watchImg = matchWatch?.image || matchWatch?.image_url || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
                       
                       return (
-                        <tr key={wish.id || idx} className="hover:bg-neutral-900/20">
+                        <tr key={wish.id || `${wishUserId}-${wishPropId}-${idx}`} className="hover:bg-neutral-900/20">
                           <td className="py-4 px-6">
                             <div className="font-semibold text-neutral-200">{email}</div>
                             <div className="text-[10px] text-neutral-500 mt-0.5">{name}</div>
@@ -6182,7 +6182,7 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                             <span className="font-serif font-bold text-white text-xs">{watchName}</span>
                           </td>
                           <td className="py-4 px-6 font-mono text-neutral-400 text-[11px]">
-                            {wishPropId ? wishPropId.substring(0, 8).toUpperCase() : "N/A"}...
+                            {wishPropId ? wishPropId.toUpperCase() : "N/A"}
                           </td>
                           <td className="py-4 px-6 text-neutral-400 font-mono text-[10px]">
                             {wish.created_at ? new Date(wish.created_at).toLocaleDateString() : "Undated"}
@@ -6232,18 +6232,19 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                   <tbody className="divide-y divide-neutral-900/40 font-sans">
                     {carts.map((cartItem: any, idx: number) => {
                       const cartUserId = cartItem.user_id ? String(cartItem.user_id) : "";
+                      const cartPropId = cartItem.product_id ? String(cartItem.product_id) : "";
                       const profile = profiles.find(p => p.id === cartItem.user_id);
-                      const email = profile?.email || "Guest (" + (cartUserId ? cartUserId.substring(0, 6) : "Anon") + ")";
+                      const email = profile?.email || "Guest (" + (cartUserId ? (cartUserId.includes("-") ? cartUserId.split("-")[0] : cartUserId.substring(0, 8)) : "Anon") + ")";
                       const name = profile?.name || "Anonymous User";
-                      const matchWatch = watches.find(w => w.id === cartItem.product_id);
-                      const watchName = matchWatch?.name || "Premium Chronograph";
+                      const matchWatch = watches.find(w => String(w.id).toLowerCase() === cartPropId.toLowerCase());
+                      const watchName = matchWatch?.name || `Product Specimen (${cartPropId ? (cartPropId.includes("-") ? cartPropId.split("-")[0] : cartPropId.substring(0, 8)) : "N/A"})`;
                       const watchImg = matchWatch?.image || matchWatch?.image_url || "https://images.unsplash.com/photo-1524592091214-8c97af1c0db4?auto=format&fit=crop&q=80&w=800";
                       const qty = cartItem.quantity || 1;
-                      const price = matchWatch?.price || 0;
+                      const price = matchWatch?.price || 199; // Graceful default raw fallback price if not resolved
                       const subtotal = qty * price;
                       
                       return (
-                        <tr key={cartItem.id || idx} className="hover:bg-neutral-900/20">
+                        <tr key={cartItem.id || `${cartUserId}-${cartPropId}-${idx}`} className="hover:bg-neutral-900/20">
                           <td className="py-4 px-6">
                             <div className="font-semibold text-neutral-200">{email}</div>
                             <div className="text-[10px] text-neutral-500 mt-0.5">{name}</div>
@@ -6261,13 +6262,13 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                             <span className="font-serif font-bold text-white text-xs">{watchName}</span>
                           </td>
                           <td className="py-4 px-6 font-mono text-[11px] text-neutral-300">
-                            {price > 0 ? getFormattedPrice(price) : "Evaluating"}
+                             {price > 0 ? getFormattedPrice(price) : "Evaluating"}
                           </td>
                           <td className="py-4 px-6 font-mono font-bold text-neutral-200 text-xs">
                             x {qty}
                           </td>
                           <td className="py-4 px-6 font-mono font-bold text-gold text-xs">
-                            {price > 0 ? getFormattedPrice(subtotal) : "Processing"}
+                             {price > 0 ? getFormattedPrice(subtotal) : "Processing"}
                           </td>
                         </tr>
                       );

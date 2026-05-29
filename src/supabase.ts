@@ -1,37 +1,44 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Fetch from environment variables dynamically
+// Fetch from environment variables dynamically using direct references to process.env
+// this allows Vite's define plugin to inline the substituted values properly
 const env = (import.meta as any).env || {};
-const procEnv = (typeof process !== "undefined" ? process.env : {}) as any;
 
-const supabaseUrl = 
-  env.NEXT_PUBLIC_SUPABASE_URL || 
-  procEnv.NEXT_PUBLIC_SUPABASE_URL || 
-  env.VITE_SUPABASE_URL || 
-  procEnv.VITE_SUPABASE_URL ||
-  env.SUPABASE_URL ||
-  procEnv.SUPABASE_URL;
+// @ts-ignore
+const rawSupabaseUrl = (typeof process !== "undefined" && process.env ? process.env.NEXT_PUBLIC_SUPABASE_URL : "") || env.VITE_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || "";
+// @ts-ignore
+const rawSupabaseAnonKey = (typeof process !== "undefined" && process.env ? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY : "") || env.VITE_SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
-const supabaseAnonKey = 
-  env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
-  procEnv.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
-  env.VITE_SUPABASE_ANON_KEY || 
-  procEnv.VITE_SUPABASE_ANON_KEY ||
-  env.SUPABASE_ANON_KEY ||
-  procEnv.SUPABASE_ANON_KEY;
+const trimValue = (val: any): string => {
+  if (!val) return "";
+  const s = String(val).trim();
+  if (s === "undefined" || s === "null" || s === "[placeholder]" || s.includes("placeholder")) {
+    return "";
+  }
+  return s;
+};
 
-// Verify if credentials have been configured
-export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey);
+export const supabaseUrl = trimValue(rawSupabaseUrl);
+export const supabaseAnonKey = trimValue(rawSupabaseAnonKey);
+
+// Verify if credentials have been correctly configured
+export const isSupabaseConfigured = !!(
+  supabaseUrl && 
+  supabaseAnonKey && 
+  supabaseUrl.startsWith("http")
+);
 
 export const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
-// Display a high luxury notification logs when database connections are uncalibrated
+// Display visual warning logs when database connections are uncalibrated
 if (!isSupabaseConfigured) {
   console.warn(
-    "Supabase configuration coordinates are missing in environment variables. Define NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY inside environment settings."
+    "[Supabase Connection] Supabase credentials coordinates are missing or unconfigured. App will run in secure, robust high-fidelity client-only demo state."
   );
+} else {
+  console.log(`[Supabase Connection] Success: Initialized with URL: ${supabaseUrl}`);
 }
 
 // Interfaces aligned with our PostgreSQL database schema
@@ -1025,7 +1032,10 @@ export const getSupabaseAllProfiles = async (): Promise<SupabaseProfile[]> => {
 
 // 13. Fetch All Wishlist Items Across Users
 export const getSupabaseAllWishlists = async (): Promise<any[]> => {
-  if (!supabase) return [];
+  if (!supabase) {
+    console.warn("[Supabase Admin Analytics Debug] Supabase client is not initialized.");
+    return [];
+  }
   try {
     console.log("[Supabase Admin Analytics Debug] Fetching admin wishlist records from table: wishlist");
 
@@ -1040,6 +1050,8 @@ export const getSupabaseAllWishlists = async (): Promise<any[]> => {
 
     const count = data?.length || 0;
     console.log(`[Supabase Admin Analytics Debug] SUCCESS: 'wishlist' query resolved. Count of rows returned: ${count}`);
+    console.log("[Supabase Admin Analytics Debug] RAW WISHLIST ARRAY DATA RECEIVED:", JSON.stringify(data));
+    console.log("[Supabase Admin Analytics Debug] Raw Wishlist array object:", data);
     return data || [];
   } catch (err) {
     console.error("[Supabase Admin Wishlists Exception] getSupabaseAllWishlists failed completely:", err);
@@ -1049,7 +1061,10 @@ export const getSupabaseAllWishlists = async (): Promise<any[]> => {
 
 // 14. Fetch All Cart Items Across Users
 export const getSupabaseAllCartItems = async (): Promise<any[]> => {
-  if (!supabase) return [];
+  if (!supabase) {
+    console.warn("[Supabase Admin Analytics Debug] Supabase client is not initialized.");
+    return [];
+  }
   try {
     console.log("[Supabase Admin Analytics Debug] Fetching admin cart records from table: cart");
 
@@ -1064,6 +1079,8 @@ export const getSupabaseAllCartItems = async (): Promise<any[]> => {
 
     const count = data?.length || 0;
     console.log(`[Supabase Admin Analytics Debug] SUCCESS: 'cart' query resolved. Count of rows returned: ${count}`);
+    console.log("[Supabase Admin Analytics Debug] RAW CART ARRAY DATA RECEIVED:", JSON.stringify(data));
+    console.log("[Supabase Admin Analytics Debug] Raw Cart array object:", data);
     return data || [];
   } catch (err) {
     console.error("[Supabase Admin Carts Exception] getSupabaseAllCartItems failed completely:", err);
