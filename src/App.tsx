@@ -4831,33 +4831,53 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
         .subscribe();
 
       // Setup dynamic table listeners for Wishlist and Cart
-      getWishlistTableName().then(tableName => {
-        if (!supabase) return;
+      if (supabase) {
+        // Highly resilient dual-table listener registrations for wishlist schemas
         supabase
-          .channel("admin-realtime-wishlist-changes")
+          .channel("admin-realtime-wishlist-generic")
           .on(
             "postgres_changes",
-            { event: "*", schema: "public", table: tableName || "wishlist" },
+            { event: "*", schema: "public", table: "wishlist" },
             () => {
               loadAdminWishlists(true);
             }
           )
           .subscribe();
-      });
 
-      getCartTableName().then(tableName => {
-        if (!supabase) return;
         supabase
-          .channel("admin-realtime-cart-changes")
+          .channel("admin-realtime-wishlists-plural")
           .on(
             "postgres_changes",
-            { event: "*", schema: "public", table: tableName || "cart" },
+            { event: "*", schema: "public", table: "wishlists" },
+            () => {
+              loadAdminWishlists(true);
+            }
+          )
+          .subscribe();
+
+        // Highly resilient dual-table listener registrations for cart schemas
+        supabase
+          .channel("admin-realtime-cart-generic")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "cart" },
             () => {
               loadAdminCarts(true);
             }
           )
           .subscribe();
-      });
+
+        supabase
+          .channel("admin-realtime-cart_items-schema")
+          .on(
+            "postgres_changes",
+            { event: "*", schema: "public", table: "cart_items" },
+            () => {
+              loadAdminCarts(true);
+            }
+          )
+          .subscribe();
+      }
 
       return () => {
         clearInterval(pollInterval);

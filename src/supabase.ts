@@ -998,15 +998,49 @@ export const getSupabaseAllProfiles = async (): Promise<SupabaseProfile[]> => {
 export const getSupabaseAllWishlists = async (): Promise<any[]> => {
   if (!supabase) return [];
   try {
-    const tableName = await getWishlistTableName();
-    const { data, error } = await supabase
-      .from(tableName || "wishlist")
-      .select("*");
-    
+    let data: any[] = [];
+    let error: any = null;
+
+    // Try 'wishlist' table first
+    const res1 = await supabase.from("wishlist").select("*");
+    if (!res1.error) {
+      data = res1.data || [];
+    } else {
+      error = res1.error;
+    }
+
+    // Try 'wishlists' table fallback if we got an undefined_table error (42P01) or table missing error
+    if (res1.error && (res1.error.code === "42P01" || res1.error.message?.includes("does not exist"))) {
+      const res2 = await supabase.from("wishlists").select("*");
+      if (!res2.error) {
+        data = res2.data || [];
+        error = null;
+      } else {
+        error = res2.error;
+      }
+    }
+
+    // Secondary union check: what if both tables exist and contain records? Let's check both
+    if (!res1.error) {
+      const res2 = await supabase.from("wishlists").select("*");
+      if (!res2.error && res2.data && res2.data.length > 0) {
+        const existingKeys = new Set(data.map(item => `${item.user_id}-${item.product_id}`));
+        for (const item of res2.data) {
+          const key = `${item.user_id}-${item.product_id}`;
+          if (!existingKeys.has(key)) {
+            data.push(item);
+            existingKeys.add(key);
+          }
+        }
+      }
+    }
+
     if (error) {
-      console.error(`[Supabase Admin Wishlists] Error retrieving from ${tableName}:`, error);
+      console.error("[Supabase Admin Wishlists] Error retrieving from wishlist tables:", error);
       return [];
     }
+    
+    console.log(`[Supabase Admin Wishlists] Successfully retrieved ${data.length} wishlists records`);
     return data || [];
   } catch (err) {
     console.error("[Supabase Admin Wishlists Exception] getSupabaseAllWishlists:", err);
@@ -1018,15 +1052,49 @@ export const getSupabaseAllWishlists = async (): Promise<any[]> => {
 export const getSupabaseAllCartItems = async (): Promise<any[]> => {
   if (!supabase) return [];
   try {
-    const tableName = await getCartTableName();
-    const { data, error } = await supabase
-      .from(tableName || "cart")
-      .select("*");
-    
+    let data: any[] = [];
+    let error: any = null;
+
+    // Try 'cart_items' first (modern schema default)
+    const res1 = await supabase.from("cart_items").select("*");
+    if (!res1.error) {
+      data = res1.data || [];
+    } else {
+      error = res1.error;
+    }
+
+    // Try 'cart' fallback table if undefined_table error
+    if (res1.error && (res1.error.code === "42P01" || res1.error.message?.includes("does not exist"))) {
+      const res2 = await supabase.from("cart").select("*");
+      if (!res2.error) {
+        data = res2.data || [];
+        error = null;
+      } else {
+        error = res2.error;
+      }
+    }
+
+    // Secondary union check: merge results if both tables have data
+    if (!res1.error) {
+      const res2 = await supabase.from("cart").select("*");
+      if (!res2.error && res2.data && res2.data.length > 0) {
+        const existingKeys = new Set(data.map(item => `${item.user_id}-${item.product_id}`));
+        for (const item of res2.data) {
+          const key = `${item.user_id}-${item.product_id}`;
+          if (!existingKeys.has(key)) {
+            data.push(item);
+            existingKeys.add(key);
+          }
+        }
+      }
+    }
+
     if (error) {
-      console.error(`[Supabase Admin Carts] Error retrieving from ${tableName}:`, error);
+      console.error("[Supabase Admin Carts] Error retrieving from cart tables:", error);
       return [];
     }
+
+    console.log(`[Supabase Admin Carts] Successfully retrieved ${data.length} cart records`);
     return data || [];
   } catch (err) {
     console.error("[Supabase Admin Carts Exception] getSupabaseAllCartItems:", err);
