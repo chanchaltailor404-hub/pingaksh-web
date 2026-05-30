@@ -85,6 +85,7 @@ export interface SupabaseOrder {
   shipping_zip?: string;
   payment_method?: string;
   created_at?: string;
+  tracking_id?: string;
   order_items?: {
     id: string;
     product_name: string;
@@ -357,13 +358,15 @@ export const createSupabaseOrder = async (
   }
 
   try {
-    console.log(`[Supabase Order] Creating new order entry: user ID: ${userId || "GUEST"}, email: ${email}, items: ${items.length}`);
+    const trackingId = "PNG" + Math.floor(Date.now() / 1000);
+    console.log(`[Supabase Order] Creating new order entry: user ID: ${userId || "GUEST"}, email: ${email}, items: ${items.length}, tracking ID: ${trackingId}`);
     
     const payload: any = {
       customer_email: email,
       customer_phone: phone || null,
       total,
-      status: "calibrating"
+      status: "calibrating",
+      tracking_id: trackingId
     };
 
     if (userId) {

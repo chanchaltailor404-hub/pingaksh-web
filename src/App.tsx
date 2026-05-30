@@ -39,6 +39,7 @@ import {
   Check
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
+import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { cn } from "./lib/utils";
 // Define CustomUser interface aligned with Supabase authentication
 export interface CustomUser {
@@ -1193,6 +1194,7 @@ const Checkout = ({
       }));
 
       let orderId = "ORD-" + Math.floor(100000 + Math.random() * 900000);
+      const trackingId = "PNG" + Math.floor(Date.now() / 1000);
 
       if (isSupabaseConfigured && supabase) {
         // 1. Get current authenticated user
@@ -1215,7 +1217,8 @@ const Checkout = ({
           shipping_address: formData.address || null,
           shipping_city: formData.city || null,
           shipping_state: formData.state || null,
-          shipping_zip: formData.zip || null
+          shipping_zip: formData.zip || null,
+          tracking_id: trackingId
         };
 
         // 3. Log the payload BEFORE performing the insert
@@ -1284,6 +1287,7 @@ const Checkout = ({
         const ordersList = JSON.parse(savedOrders);
         const newOrder = {
           id: orderId,
+          tracking_id: trackingId,
           date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" }),
           total,
           items: items.map(i => ({ id: i.id, name: i.name, price: getRawPriceINR(i.price), quantity: i.quantity, image: i.image })),
@@ -1296,6 +1300,7 @@ const Checkout = ({
         };
         ordersList.unshift(newOrder);
         localStorage.setItem("pingaksh_customer_orders", JSON.stringify(ordersList));
+        localStorage.setItem("pingaksh_latest_tracking_id", trackingId);
       } catch (err) {
         console.error("Local order sync failed", err);
       }
@@ -1536,6 +1541,13 @@ const Success = () => {
   
   const formattedDelivery = `${minDelivery.toLocaleDateString("en-IN", options)} - ${maxDelivery.toLocaleDateString("en-IN", options)}`;
 
+  const [trackingId, setTrackingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const latId = localStorage.getItem("pingaksh_latest_tracking_id");
+    setTrackingId(latId);
+  }, []);
+
   return (
     <div className="pt-40 pb-28 px-6 min-h-screen bg-black flex items-center justify-center text-center">
       <motion.div 
@@ -1557,6 +1569,12 @@ const Success = () => {
 
         {/* Dynamic delivery box */}
         <div className="p-5 border border-neutral-800/80 bg-neutral-950/60 rounded-xl text-left space-y-3 font-sans">
+          {trackingId && (
+            <div className="pb-2.5 border-b border-neutral-900/60 flex items-center justify-between text-[11px] font-mono">
+              <span className="text-neutral-500 uppercase tracking-wider">Tracking ID</span>
+              <span className="text-emerald-400 font-bold tracking-widest">{trackingId}</span>
+            </div>
+          )}
           <div className="flex items-start gap-3">
             <div className="text-gold shrink-0 mt-0.5">
               <svg className="w-5 h-5 text-gold" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -3303,7 +3321,8 @@ const ProfilePage = ({
             shipping_zip: ord.shipping_zip,
             customer_phone: ord.customer_phone,
             customer_email: ord.customer_email,
-            created_at: ord.created_at
+            created_at: ord.created_at,
+            tracking_id: ord.tracking_id
           }));
           setCustomerOrders(formatted);
         } else {
@@ -3638,6 +3657,13 @@ const ProfilePage = ({
                               {ord.payment_method === "COD" ? "Cash on Delivery (COD)" : (ord.payment_method || "Secured Card Link")}
                             </span>
                           </p>
+                          {ord.tracking_id && (
+                            <p className="text-neutral-200 leading-normal mt-1">
+                              Tracking ID: <span className="text-emerald-400 font-mono font-bold ml-1 bg-emerald-950/20 px-1.5 py-0.5 rounded border border-emerald-900/10 select-all">
+                                {ord.tracking_id}
+                              </span>
+                            </p>
+                          )}
                           {ord.shipping_name && (
                             <p className="text-neutral-400 text-[11px] mt-0.5">
                               Deliveree: <span className="text-neutral-300 font-medium">{ord.shipping_name}</span>
@@ -6084,6 +6110,30 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
             const estDate = new Date(dateObj.getTime() + 5 * 24 * 60 * 60 * 1000);
             return estDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
           };
+
+          // Generate daily orders trend data for the last 7 calendar days
+          const chartData = (() => {
+            const daysData: { name: string; "New Orders": number }[] = [];
+            for (let i = 6; i >= 0; i--) {
+              const d = new Date();
+              d.setDate(d.getDate() - i);
+              const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+              
+              const count = orders.filter((o: any) => {
+                const rawDate = o.created_at || o.date;
+                if (!rawDate) return false;
+                const orderDateObj = new Date(rawDate);
+                const orderDateStr = orderDateObj.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                return orderDateStr === dateStr;
+              }).length;
+              
+              daysData.push({
+                name: dateStr,
+                "New Orders": count
+              });
+            }
+            return daysData;
+          })();
           
           return (
             <div className="space-y-6">
@@ -6112,7 +6162,7 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                 <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
                   <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Total Transactions</span>
                   <div className="flex justify-between items-baseline">
-                    <span className="text-xl font-serif font-bold text-white">{orders.length}</span>
+                     <span className="text-xl font-serif font-bold text-white">{orders.length}</span>
                     <span className="text-[9px] font-mono text-neutral-400">Ledger entries</span>
                   </div>
                 </div>
@@ -6133,6 +6183,37 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                   </div>
                 </div>
               </div>
+
+              {/* Daily Orders Velocity Recharts Trend */}
+              {!isOrdersLoading && orders.length > 0 && (
+                <div className="bg-neutral-955 p-5 rounded-xl border border-neutral-900/80 font-sans space-y-4">
+                  <div className="flex justify-between items-center pb-2 border-b border-neutral-900">
+                    <div>
+                      <h3 className="text-white text-xs font-serif font-bold uppercase tracking-wider">Daily Orders Velocity</h3>
+                      <p className="text-[10px] text-neutral-500 font-light">Last 7 calendar days dispatch rate</p>
+                    </div>
+                    <span className="text-[9px] font-mono text-gold uppercase bg-gold/10 px-2 py-0.5 rounded border border-gold/20 tracking-wider">
+                      TREND METRIC
+                    </span>
+                  </div>
+                  <div className="h-36 w-full text-xs">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={chartData} margin={{ top: 5, right: 10, left: -22, bottom: 5 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#171717" vertical={false} />
+                        <XAxis dataKey="name" stroke="#525252" tickLine={false} style={{ fontSize: '9px', fontFamily: 'monospace' }} />
+                        <YAxis stroke="#525252" tickLine={false} style={{ fontSize: '9px', fontFamily: 'monospace' }} allowDecimals={false} />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#0a0a0a', borderColor: '#262626', borderRadius: '6px' }} 
+                          labelStyle={{ color: '#a3a3a3', fontFamily: 'monospace', fontSize: '9px' }}
+                          itemStyle={{ color: '#f59e0b', fontSize: '10px' }}
+                        />
+                        <Line type="monotone" dataKey="New Orders" stroke="#d97706" strokeWidth={2.5} dot={{ fill: '#d97706', r: 3.5 }} activeDot={{ r: 5 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
               {/* Main Active Orders Interactive Board */}
               {isOrdersLoading ? (
                 <div className="space-y-4 py-4">
@@ -6260,6 +6341,12 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                                 <span className="text-neutral-400 font-mono w-14 shrink-0 uppercase tracking-wider text-[9px]">Phone:</span>
                                 <span className="text-neutral-205 font-mono select-all hover:text-gold transition-colors">{ord.customer_phone || "Not recorded"}</span>
                               </div>
+                              {ord.tracking_id && (
+                                <div className="flex items-center gap-2 text-xs">
+                                  <span className="text-neutral-400 font-mono w-14 shrink-0 uppercase tracking-wider text-[9px]">Tracking:</span>
+                                  <span className="text-emerald-400 font-mono font-bold select-all">{ord.tracking_id}</span>
+                                </div>
+                              )}
                               <div className="flex items-start gap-2 text-xs pt-1">
                                 <span className="text-neutral-400 font-mono w-14 shrink-0 uppercase tracking-wider text-[9px] mt-0.5">Vector:</span>
                                 <div className="text-neutral-400 text-[11px] bg-neutral-900/60 border border-neutral-900 p-2.5 rounded-lg w-full leading-relaxed">
