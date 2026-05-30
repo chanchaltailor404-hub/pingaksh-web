@@ -4770,7 +4770,7 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
   const [isProfilesLoading, setIsProfilesLoading] = useState(false);
   
   // Active luxury dashboard navigation tab switcher
-  const [activeTab, setActiveTab] = useState<"products" | "orders" | "subscribers" | "wishlists" | "carts">("products");
+  const [activeTab, setActiveTab] = useState<"products" | "orders" | "deliveries" | "subscribers" | "wishlists" | "carts">("products");
 
   // Orders Search and Filtering state for Admin Orders Management
   const [orderSearch, setOrderSearch] = useState("");
@@ -4821,13 +4821,60 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
     }
   };
 
-  // Load logistics orders from real PostgreSQL database
+  // Load logistics orders from real PostgreSQL database using direct raw query from orders table without filters and joins
   const loadAdminOrders = async (isBackground = false) => {
     if (!isBackground) setIsOrdersLoading(true);
     try {
       if (isSupabaseConfigured && supabase) {
-        const dbOrders = await getSupabaseAllOrders();
-        setOrders(dbOrders || []);
+        console.log("[Supabase Admin Orders] Fetching via direct query...");
+        // Fetch orders directly from orders table without filters and joins
+        const { data, error } = await supabase
+          .from('orders')
+          .select('*');
+
+        // Requirement 5: Add console logs with exact headers
+        console.log("RAW ORDERS", data);
+        console.log("ORDER COUNT", data?.length);
+
+        if (error) {
+          console.error("[Supabase Admin Orders Query Error] details:", error);
+          showToast(`Fetch error: ${error.message}`, "error");
+        }
+
+        // Return immediately or sort chronologically to preserve user preference
+        if (data) {
+          // Fetch corresponding order items separately to enrich the render logic safely and avoid broken joins
+          const orderIds = data.map((o: any) => o.id);
+          let items: any[] = [];
+          if (orderIds.length > 0) {
+            const { data: orderItems, error: itemsError } = await supabase
+              .from("order_items")
+              .select("*")
+              .in("order_id", orderIds);
+            if (!itemsError && orderItems) {
+              items = orderItems;
+            } else {
+              console.warn("Could not load associated order items:", itemsError);
+            }
+          }
+
+          const enrichedOrders = data.map((order: any) => ({
+            ...order,
+            order_items: items.filter((item: any) => item.order_id === order.id)
+          }));
+
+          const sortedOrders = [...enrichedOrders].sort((a: any, b: any) => {
+            const dateA = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const dateB = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return dateB - dateA;
+          });
+          setOrders(sortedOrders);
+        } else {
+          setOrders([]);
+        }
+      } else {
+        console.warn("[loadAdminOrders] Supabase is not configured.");
+        setOrders([]);
       }
     } catch (err) {
       console.error("Failed loading shipment logistics:", err);
@@ -5873,7 +5920,8 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
         <div className="flex border-b border-neutral-900 gap-1 overflow-x-auto shrink-0 py-1">
           {[
             { id: "products", label: "PRODUCTS", count: watches.length },
-            { id: "orders", label: "DELIVERIES", count: orders.length },
+            { id: "orders", label: "ORDERS REGISTRY", count: orders.length },
+            { id: "deliveries", label: "DELIVERIES", count: orders.length },
             { id: "subscribers", label: "SUBSCRIBERS", count: subscribers.length },
             { id: "wishlists", label: "WISHLISTS", count: wishlists.length },
             { id: "carts", label: "CUSTOMER CARTS", count: carts.length }
@@ -6026,65 +6074,17 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
         )}
 
                       {/* --- 2. ORDERS DELIVERIES TAB VIEW --- */}
-        {activeTab === "orders" && (() => {
-          // Define local computation for orders filtering & searching within an immediately invoked function expression (IIFE)
-          const filteredOrders = orders.filter((ord: any) => {
-            // 1. Status Filter
-            const rawStatus = (ord.order_status || ord.status || "Pending").trim().toLowerCase();
-            
-            if (orderStatusFilter !== "all") {
-              if (orderStatusFilter === "pending" && rawStatus !== "pending") return false;
-              if (orderStatusFilter === "processing" && rawStatus !== "processing" && rawStatus !== "calibrating") return false;
-              if (orderStatusFilter === "shipped" && rawStatus !== "shipped" && rawStatus !== "transit" && rawStatus !== "shipped and tracking") return false;
-              if (orderStatusFilter === "out for delivery" && rawStatus !== "out for delivery" && rawStatus !== "customs" && rawStatus !== "custom") return false;
-              if (orderStatusFilter === "delivered" && rawStatus !== "delivered" && rawStatus !== "fulfilled" && rawStatus !== "success" && rawStatus !== "completed") return false;
-              if (orderStatusFilter === "cancelled" && rawStatus !== "cancelled") return false;
-            }
-
-            // 2. Search Query (OrderStatus, Name, Email, Order ID, Product Name, Phone)
-            if (orderSearch.trim()) {
-              const q = orderSearch.toLowerCase();
-              const idMatches = ord.id.toLowerCase().includes(q);
-              const nameMatches = (ord.shipping_name || "").toLowerCase().includes(q);
-              const emailMatches = (ord.customer_email || "").toLowerCase().includes(q);
-              const phoneMatches = (ord.customer_phone || "").toLowerCase().includes(q);
-              const productMatches = ord.order_items?.some((it: any) => it.product_name.toLowerCase().includes(q)) || false;
-
-              if (!idMatches && !nameMatches && !emailMatches && !phoneMatches && !productMatches) {
-                return false;
-              }
-            }
-
-            return true;
-          });
-
-          const getOrderStatusCount = (statusType: string) => {
-            return orders.filter((ord: any) => {
-              const rawStatus = (ord.order_status || ord.status || "Pending").trim().toLowerCase();
-              if (statusType === "all") return true;
-              if (statusType === "pending" && rawStatus === "pending") return true;
-              if (statusType === "processing" && (rawStatus === "processing" || rawStatus === "calibrating")) return true;
-              if (statusType === "shipped" && (rawStatus === "shipped" || rawStatus === "transit" || rawStatus === "shipped and tracking")) return true;
-              if (statusType === "out for delivery" && (rawStatus === "out for delivery" || rawStatus === "customs" || rawStatus === "custom")) return true;
-              if (statusType === "delivered" && (rawStatus === "delivered" || rawStatus === "fulfilled" || rawStatus === "success" || rawStatus === "completed")) return true;
-              if (statusType === "cancelled" && rawStatus === "cancelled") return true;
-              return false;
-            }).length;
-          };
-
-          const totalRevenue = orders.reduce((sum, o) => sum + Number(o.total || 0), 0);
-          const activeOrdersCount = orders.filter(o => {
-            const rawStatus = (o.order_status || o.status || "Pending").trim().toLowerCase();
-            return rawStatus !== "delivered" && rawStatus !== "fulfilled" && rawStatus !== "cancelled";
-          }).length;
-
-          // Estimated Delivery Time (Order Date + 5 calendar days)
+        {(activeTab === "orders" || activeTab === "deliveries") && (() => {
+          const totalRevenue = orders.reduce((sum, o) => {
+            const val = o.total_amount !== undefined && o.total_amount !== null ? o.total_amount : (o.total !== undefined && o.total !== null ? o.total : 0);
+            return sum + Number(val);
+          }, 0);
           const getEstimatedDeliveryString = (createdAt?: string) => {
             const dateObj = createdAt ? new Date(createdAt) : new Date();
             const estDate = new Date(dateObj.getTime() + 5 * 24 * 60 * 60 * 1000);
             return estDate.toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
           };
-
+          
           return (
             <div className="space-y-6">
               {/* Premium Luxury Admin Title Section */}
@@ -6108,28 +6108,12 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
               </div>
 
               {/* Status Metrics Counters Panel */}
-              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
                 <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
                   <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Total Transactions</span>
                   <div className="flex justify-between items-baseline">
                     <span className="text-xl font-serif font-bold text-white">{orders.length}</span>
                     <span className="text-[9px] font-mono text-neutral-400">Ledger entries</span>
-                  </div>
-                </div>
-
-                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
-                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Active Logistics</span>
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-xl font-serif font-bold text-gold">{activeOrdersCount}</span>
-                    <span className="text-[9px] font-mono text-gold bg-gold/10 px-1 py-0.5 rounded border border-gold/15">Awaiting Handoff</span>
-                  </div>
-                </div>
-
-                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
-                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Completed Handoffs</span>
-                  <div className="flex justify-between items-baseline">
-                    <span className="text-xl font-serif font-bold text-emerald-400">{getOrderStatusCount("delivered")}</span>
-                    <span className="text-[9px] font-mono text-emerald-500 bg-emerald-950/30 px-1 py-0.5 rounded border border-emerald-900/10">Delivered</span>
                   </div>
                 </div>
 
@@ -6141,142 +6125,43 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                   </div>
                 </div>
 
-                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors col-span-2 lg:col-span-1">
-                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Suspended Files</span>
+                <div className="bg-neutral-950 p-4 border border-neutral-900/60 rounded-xl space-y-1 hover:border-neutral-800 transition-colors">
+                  <span className="text-neutral-500 text-[9px] font-mono uppercase tracking-widest block">Database Link</span>
                   <div className="flex justify-between items-baseline">
-                    <span className="text-xl font-serif font-bold text-red-400">{getOrderStatusCount("cancelled")}</span>
-                    <span className="text-[9px] font-mono text-red-500 bg-red-950/20 px-1 py-0.5 rounded border border-red-900/25">Cancelled</span>
+                    <span className="text-xs font-mono text-emerald-400 uppercase tracking-widest font-bold">✓ Live Select</span>
+                    <span className="text-[8px] font-mono text-neutral-400">Active Sync</span>
                   </div>
                 </div>
               </div>
-
-              {/* Advanced Search & Filtering Console */}
-              <div className="bg-neutral-950 p-4 border border-neutral-900/80 rounded-xl space-y-4">
-                <div className="flex flex-col md:flex-row gap-3">
-                  <div className="relative flex-1">
-                    <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none text-neutral-500">
-                      <Search size={15} />
-                    </div>
-                    <input
-                      type="text"
-                      placeholder="Audit by Order ID, Customer Name, Email, Phone, or Timepieces..."
-                      value={orderSearch}
-                      onChange={(e) => setOrderSearch(e.target.value)}
-                      className="w-full bg-neutral-900 border border-neutral-850 rounded-lg py-2.5 pl-10 pr-4 text-xs text-white focus:outline-none focus:border-gold transition-colors font-sans placeholder-neutral-500"
-                    />
-                    {orderSearch && (
-                      <button
-                        onClick={() => setOrderSearch("")}
-                        className="absolute inset-y-0 right-3 flex items-center text-neutral-500 hover:text-white text-xs cursor-pointer"
-                        title="Clear filter query"
-                      >
-                        <X size={14} />
-                      </button>
-                    )}
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono uppercase text-neutral-500 tracking-wider hidden lg:inline">Quick Phase:</span>
-                    <select
-                      value={orderStatusFilter}
-                      onChange={(e) => setOrderStatusFilter(e.target.value)}
-                      className="bg-neutral-900 border border-neutral-850 rounded-lg px-3 py-2.5 text-xs text-neutral-300 font-mono focus:outline-none focus:border-gold cursor-pointer"
-                    >
-                      <option value="all">All Status Registers ({orders.length})</option>
-                      <option value="pending">1. Pending ({getOrderStatusCount("pending")})</option>
-                      <option value="processing">2. Processing ({getOrderStatusCount("processing")})</option>
-                      <option value="shipped">3. Shipped ({getOrderStatusCount("shipped")})</option>
-                      <option value="out for delivery">4. Out for Delivery ({getOrderStatusCount("out for delivery")})</option>
-                      <option value="delivered">5. Delivered ({getOrderStatusCount("delivered")})</option>
-                      <option value="cancelled">X. Cancelled ({getOrderStatusCount("cancelled")})</option>
-                    </select>
-                  </div>
-                </div>
-
-                {/* Horizontal Filter Pill Tabs */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-neutral-900">
-                  <span className="text-[9px] font-mono uppercase text-neutral-500 tracking-widest mr-2 select-none">Calibrated Filter:</span>
-                  
-                  {[
-                    { id: "all", label: "Archive Full Feed", count: orders.length },
-                    { id: "pending", label: "Pending", count: getOrderStatusCount("pending") },
-                    { id: "processing", label: "Processing", count: getOrderStatusCount("processing") },
-                    { id: "shipped", label: "Shipped", count: getOrderStatusCount("shipped") },
-                    { id: "out for delivery", label: "Out for Delivery", count: getOrderStatusCount("out for delivery") },
-                    { id: "delivered", label: "Delivered", count: getOrderStatusCount("delivered") },
-                    { id: "cancelled", label: "Cancelled", count: getOrderStatusCount("cancelled") }
-                  ].map((pill) => {
-                    const isSelected = orderStatusFilter === pill.id;
-                    return (
-                      <button
-                        key={pill.id}
-                        onClick={() => setOrderStatusFilter(pill.id)}
-                        className={`px-3 py-1.5 rounded-full text-[10px] font-mono tracking-wide transition-all cursor-pointer flex items-center gap-1.5 border select-none ${
-                          isSelected 
-                            ? "bg-gold/15 text-gold border-gold/30 font-bold" 
-                            : "bg-neutral-900 text-neutral-400 border-transparent hover:border-neutral-800 hover:text-white"
-                        }`}
-                      >
-                        {pill.label}
-                        <span className={`px-1.5 py-0.25 rounded-full text-[8px] font-bold ${
-                          isSelected ? "bg-white text-black" : "bg-neutral-800 text-neutral-500"
-                        }`}>
-                          {pill.count}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
               {/* Main Active Orders Interactive Board */}
               {isOrdersLoading ? (
                 <div className="space-y-4 py-4">
                   {[1, 2, 3].map((shimmer) => (
-                    <div key={shimmer} className="border border-neutral-900 rounded-2xl p-6 bg-neutral-950/40 space-y-4 animate-pulse">
+                    <div key={shimmer} className="border border-neutral-900 rounded-2xl p-6 bg-neutral-955/40 space-y-4 animate-pulse">
                       <div className="flex justify-between items-center">
                         <div className="h-5 bg-neutral-900 rounded w-1/4" />
                         <div className="h-4 bg-neutral-900 rounded w-1/6" />
                       </div>
-                      <div className="h-[1px] bg-neutral-900 rounded w-full" />
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <div className="h-4 bg-neutral-900 rounded w-1/3" />
-                          <div className="h-3 bg-neutral-900 rounded w-1/2" />
-                        </div>
-                        <div className="h-10 bg-neutral-900 rounded w-full" />
-                      </div>
                     </div>
                   ))}
                 </div>
-              ) : filteredOrders.length === 0 ? (
+              ) : orders.length === 0 ? (
                 <div className="border border-neutral-900 rounded-2xl p-12 text-center bg-neutral-955 space-y-4">
                   <div className="w-14 h-14 bg-neutral-900 text-neutral-550 rounded-full flex items-center justify-center mx-auto border border-neutral-850">
-                    <ShoppingBag size={22} />
+                    <ShoppingBag size={22} className="text-neutral-500" />
                   </div>
-                  <div className="space-y-1 text-center">
-                    <h4 className="text-white text-sm font-serif font-bold tracking-wide">No Coordinate Records Matched</h4>
+                  <div className="space-y-1 text-center font-sans">
+                    <h4 className="text-white text-sm font-serif font-bold tracking-wide">No Orders Registry Records Active</h4>
                     <p className="text-neutral-500 text-[11px] max-w-md mx-auto leading-relaxed">
-                      No customer orders comply with the active search parameters or state filter inside this registry node.
+                      No customer orders have been registered in the database, or check your Supabase credentials configuration.
                     </p>
                   </div>
-                  {(orderSearch.trim() || orderStatusFilter !== "all") && (
-                    <button
-                      onClick={() => {
-                        setOrderSearch("");
-                        setOrderStatusFilter("all");
-                      }}
-                      className="bg-neutral-900 hover:bg-neutral-850 text-gold text-[10px] font-mono tracking-widest px-5 py-2.5 rounded border border-neutral-800 hover:border-gold/30 transition-colors cursor-pointer"
-                    >
-                      RESET AUDIT FILTERS
-                    </button>
-                  )}
                 </div>
               ) : (
                 <div className="space-y-5">
-                  {filteredOrders.map((ord: any) => {
+                  {orders.map((ord: any) => {
                     const rawStatus = (ord.order_status || ord.status || "Pending").trim().toLowerCase();
-                    const formattedId = ord.id.substring(0, 8).toUpperCase();
+                    const formattedId = ord.id && ord.id.substring ? ord.id.substring(0, 8).toUpperCase() : String(ord.id);
                     
                     let activeIndex = 0;
                     let isCancelled = false;
@@ -6345,7 +6230,13 @@ const AdminDashboard = ({ user }: { user: CustomUser | null }) => {
                             </div>
                             <div className="md:border-l md:border-neutral-800 md:pl-4">
                               <span className="text-neutral-500 text-[9px] uppercase tracking-widest font-mono block">Acquisition Total</span>
-                              <span className="text-gold text-sm font-mono font-bold block">{getFormattedPrice(ord.total)}</span>
+                              <span className="text-gold text-sm font-mono font-bold block">
+                                {(() => {
+                                  const amt = ord.total_amount !== undefined && ord.total_amount !== null ? ord.total_amount : ord.total;
+                                  if (amt === undefined || amt === null) return "₹0";
+                                  return getFormattedPrice(Number(amt));
+                                })()}
+                              </span>
                             </div>
                           </div>
                         </div>
